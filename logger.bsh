@@ -1,0 +1,72 @@
+#!/bin/bash
+
+###############################################################################
+#
+# logger.bsh 
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Pacote de funcoes que faz o print de na shell formatado de acordo 
+#           com niveis de log.
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao inicial;
+#       - Funcoes que imprime logs em niveis (debug, info, warn, error)
+#
+###############################################################################
+
+
+# Nivel de log (info, debug, error, warning) - default: info
+LEVEL=${LEVEL="info"}
+
+# Comandos pre-definidos (facilitadores)
+BUSY="busy.bsh"
+
+# Funcoes
+_debug () {
+	if [ "$LEVEL" = "debug" ]; then
+		printf "[DEBUG] :: $1\n"
+	fi
+}
+
+_info () {
+	P1=$1
+	P2=$2
+	if [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		if [ "$P2" = "-b" ]; then			
+			MSG="[INFO]  :: $P1"
+			$BUSY "$MSG" &
+		else
+			if [ "$P2" = "-n" ]; then
+				printf "[ANSW]  :: $P1"
+			else 
+				if [ "$P2" = "-ok" ]; then
+					sleep 1
+					CMD="ps -elf | grep busy | grep -v grep | awk '{print \$4}'"
+					BUSYPID=`eval "$CMD"`
+					kill -13 $BUSYPID
+					printf "\r[INFO]  :: $P1 ok\n"
+				else 			
+					printf "[INFO]  :: $P1\n"
+				fi
+			fi
+		fi
+	fi
+}
+
+_error () {
+	if [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		printf "[ERROR] :: $1\n"
+	fi
+}
+
+_warn () {
+	if [ "$LEVEL" = "warning" ] || [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		printf "[WARN]  :: $1\n"
+	fi
+}
+
+"$@"

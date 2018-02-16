@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# Arquivo de log
+LOG="logger.bsh"
+
+$LOG _print "`$LOG _FG1` ########## Ambientes ETICS ############ `$LOG _FGSC`"
+
+CMD="cat ~/.sde_alias | awk '{print \$2}' | awk -F '=' '{print \$1}'"
+LISTA_AMBS=`eval "$CMD"`
+
+COUNT=0
+for AMBS in $LISTA_AMBS; do
+  if [ "$AMBS" != "" ]; then 
+    let COUNT+=1
+    CMD="grep \"$AMBS\" ~/.sde_alias | awk '{print \$3}' | awk -F'\"' '{print \$1}'"
+	CAMINHO=`eval "$CMD"`
+	$LOG _print "`$LOG _FG1`$COUNT`$LOG _FGSC`) `$LOG _FG5`$AMBS`$LOG _FGSC` ---> $CAMINHO"
+  fi 
+done
