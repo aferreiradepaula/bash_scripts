@@ -1,0 +1,631 @@
+#!/bin/bash
+
+###############################################################################
+#
+# update_ear.bsh :: Update Ear on Wildfly
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Compila o modulo e atualiza a instalacao em uma porta especifica do wildfly         
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao inicial;
+#       - Compila o modulo;
+#       - Copia os arquivos gerados para uma porta especifica do wildfly;
+#       - Inicializa/Reinicializa o wildfly da porta especifica.
+#
+# v2 :: Incluir update especifico para o operweb.
+#
+###############################################################################
+
+# Nivel de log (info, debug, error, warning, fatal) - default: info
+LEVEL=${LEVEL="info"}
+
+# Dependencia de scripts externos
+LOG="logger_v4.bsh"
+BUSY="busy_v2.bsh"
+
+# Constantes globais
+###############################################################################
+LIST_PORTS="0 1 2 3 4 5 6 7 8 9"
+LIST_CUSTOM_UPDATES="operweb"
+WILDFLY_MAIN_DIR_DEFAULT="/l/disk0/adrianof/cpqd/wildfly-8.2.0.Final"
+FONTES_DIR=""
+
+MAVEN_LOG_FILE="output.log"
+MAVEN_LOG_DIR="/home/${USER}/log/maven"
+MAVEN_LOG=""
+
+POM_FILE=""
+
+FLAG_NC=0
+FLAG_NS=0
+
+CURR_DIR=`pwd`
+TARGET_DIR=""
+
+ETICS_REPO_DIR=""
+SUPER_PARENT_DIR="main/super-parent"
+SUPER_PARENT_CDK_DIR="main/implementacao/super-parent"
+
+WILDFLY_BIN_DIR=""
+WILDFLY_EXE=""
+WILDFLY_DEPLOYMENTS_DIR=""
+
+ETICS_VERSION=""
+WILDFLY_VERSION=""
+
+ARTIFACT_ID=""
+JAR_FILE=""
+
+CUSTOM_UPDATE=""
+
+EAR_ARRAY_TO_UPDATE=""
+
+
+declare -A JAR_FILE_MAP
+
+
+# Variaveis especificas para a customizacao do operweb
+MAIN_OPERWEB_DIR=""
+MODEL_TARGET_DIR="model/target/cache"
+CORE_TARGET_DIR="core/target"
+WEBAPPLICATION_JAR_TARGET_DIR="webapplication/jar/target"
+WEBAPPLICATION_WEB_TARGET_DIR="webapplication/web/target"
+
+MODEL_CACHE_FILE="CPqD-OperWeb123.cache"
+CONFIGURATION_JAR_FILE="cpqd-configuration.jar"
+
+OLD_OPERWEB_CORE_JAR_FILE=""
+NEW_OPERWEB_CORE_JAR_FILE=""
+
+OLD_OPERWEB_WA_POJOS_JAR_FILE=""
+NEW_OPERWEB_WA_POJOS_JAR_FILE=""
+
+OLD_OPERWEB_WA_WEB_WAR_FILE=""
+NEW_OPERWEB_WA_WEB_WAR_FILE=""
+
+# Definicao de cores
+FG_VERDE='\033[0;32m'
+FG_VERDE_C='\033[1;32m' 
+FG_AZUL='\033[0;34m' 
+FG_VERMELHO='\033[0;31m' 
+FG_AMARELO='\033[1;33m' 
+FG_LARANJA='\033[0;33m' 
+
+# Volta a cor padrao
+FG_SC='\033[0m' # Sem cor
+
+
+# Funcoes
+###############################################################################
+_intro() {	
+	MSG="\n 
+	*
+	*                     ${FG_VERDE}*** ULTRA SUPER FUCKING EAR Updatator ***${FG_SC}
+	*
+	*      Compila o modulo e atualiza a instalacao em uma porta especifica do wildfly
+	*
+	***********************************************************************************\n\n"
+	$LOG _info "$MSG"
+}
+
+_uso () {
+  MSG="\n
+	*
+	* Uso: $0 <WILDFLY_PORT_NUM>/--help,-help,-h/ [WILDFLY_MAIN_DIR/-nc/-ncs/ns] [--custom=xxx] 
+	*
+	*  <WILDFLY_PORT_NUM> :: Porta do wildfly onde vai ser feito o update
+	*                        Ex: 0 (para ports-00)
+	*   ou
+	*  --help, -help, -h  :: Imprime o uso e sai.
+	*
+	*  [WILDFLY_MAIN_DIR] :: Diretorio raiz da instalacao do wildfly.
+	*                        Se nao for informado usa o valor default ~/cpqd/wildfly-8.2.0.Final
+	*  ou
+	*  [-nc]              :: Nao compilar
+	*  ou 
+	*  [-ncs]             :: Nao compilar e nao iniciar wildfly
+	*  ou 
+	*  [-ns]              :: Nao iniciar wildfly
+	*
+	*  [--custom=xxx]     :: Executar especificando uma customizacao, de acordo com a lista valida:
+	*                        Onde xxx deve um dos valores listados: $LIST_CUSTOM_UPDATES
+	*
+	***********************************************************************************\n\n"
+	$LOG _info "$MSG"
+  exit 0
+}
+
+_getParam() {
+	$LOG _debug "_getParam"	
+	if [ $# -eq 0 ]; then
+		_intro
+		_uso
+		exit 1
+	fi
+
+	if [ $# -lt 1 ] || [ $# -gt 3 ]; then	
+	  $LOG _error "Numero de parametros invalidos!"
+	  _uso
+	  exit 1
+	fi
+	
+	WILDFLY_PORT_NUM=$1
+	WILDFLY_MAIN_DIR=$2
+	CUSTOM_UPDATE=$3
+}
+
+_checkParam() {
+	$LOG _debug "_checkParam"	
+	# A porta e obrigatorio
+	if [ $WILDFLY_PORT_NUM -lt 0 ] || [ $WILDFLY_PORT_NUM -gt 9 ]; then
+		# Porta invalida.
+		$LOG _error "Porta informada nao eh valida."
+		_uso;
+		exit 1
+	fi
+	
+	# Checa valor do wildfly
+	if [ "$WILDFLY_MAIN_DIR" = "" ]; then
+		WILDFLY_MAIN_DIR=$WILDFLY_MAIN_DIR_DEFAULT
+		WILDFLY_BIN_DIR=$WILDFLY_MAIN_DIR/bin
+		WILDFLY_EXE="$WILDFLY_BIN_DIR/debugports-0$WILDFLY_PORT_NUM.sh"
+	else 
+		# Diretorio foi informado, verifica se eh um diretorio e principalmente se e do wildfly.
+		if [ "$WILDFLY_MAIN_DIR" != "-nc" ] && [ "$WILDFLY_MAIN_DIR" != "-ncs" ] && [ "$WILDFLY_MAIN_DIR" != "-ns" ]; then
+			if [ ! -d $WILDFLY_MAIN_DIR ]; then
+				CUSTOM_UPDATE=$WILDFLY_MAIN_DIR				
+				WILDFLY_MAIN_DIR=$WILDFLY_MAIN_DIR_DEFAULT
+				WILDFLY_BIN_DIR=$WILDFLY_MAIN_DIR/bin
+				WILDFLY_EXE="$WILDFLY_BIN_DIR/debugports-0$WILDFLY_PORT_NUM.sh"
+			else 
+				WILDFLY_BIN_DIR=$WILDFLY_MAIN_DIR/bin
+			
+				if [ ! -d $WILDFLY_BIN_DIR ]; then
+					$LOG _fatal "Diretorio bin do wildfly informado nao existe!"
+				else 
+					WILDFLY_EXE="$WILDFLY_BIN_DIR/debugports-0$WILDFLY_PORT_NUM.sh"
+				
+					if [ ! -f $WILDFLY_EXE ]; then
+						$LOG _fatal "Nao foi encontrado o script debugports-0$WILDFLY_PORT_NUM.sh no diretorio bin do wildfly informado!"
+					fi
+				fi
+			fi 
+		else
+			if [ "$WILDFLY_MAIN_DIR" = "-nc" ]; then
+				# Nao compila
+				FLAG_NC=1
+			else 
+				if [ "$WILDFLY_MAIN_DIR" = "-ns" ]; then
+					# Nao inicializa wildfly
+					FLAG_NS=1
+				else
+					# Nao compila e nao inicializa wildfly
+					FLAG_NC=1
+					FLAG_NS=1
+				fi
+			fi 	
+			WILDFLY_MAIN_DIR=$WILDFLY_MAIN_DIR_DEFAULT
+			WILDFLY_BIN_DIR=$WILDFLY_MAIN_DIR/bin
+			WILDFLY_EXE="$WILDFLY_BIN_DIR/debugports-0$WILDFLY_PORT_NUM.sh"
+		fi	
+	fi
+	
+	$LOG _debug "WILDFLY_BIN_DIR = $WILDFLY_BIN_DIR"
+	$LOG _debug "WILDFLY_EXE = $WILDFLY_EXE"	
+	
+	WILDFLY_DEPLOYMENTS_DIR="$WILDFLY_MAIN_DIR/ports-0$WILDFLY_PORT_NUM/deployments"
+	$LOG _debug "WILDFLY_DEPLOYMENTS_DIR = $WILDFLY_DEPLOYMENTS_DIR"
+	
+	if [ "$CUSTOM_UPDATE" != "" ]; then 
+		CMD="echo $CUSTOM_UPDATE | grep '\-\-custom\=' | awk -F '=' '{print \$2}'"
+		$LOG _debug "CMD: $CMD"
+		CUSTOM_VALUE=`eval "$CMD"`
+		$LOG _debug "CUSTOM_VALUE: $CUSTOM_VALUE"
+		if [ "$CUSTOM_VALUE" != "" ]; then
+			if [ ! -z "${LIST_CUSTOM_UPDATES##*$CUSTOM_VALUE*}" ]; then
+				# Customizacao invalida
+				$LOG _fatal "Customizacao informada nao eh valido."
+			fi
+		else
+			# Customizacao invalida
+			$LOG _fatal "Customizacao informada nao eh valido."
+		fi
+	fi
+}
+
+_getOthersVars() {
+	$LOG _debug "_getOthersVars()"
+	
+	# pwd | awk -F '/' '{print NF-1}'
+	CMD="pwd | awk -F '/' '{print NF-1}'"
+	$LOG _debug "CMD: $CMD"
+	CHECK_DIR=`eval "$CMD"`
+	$LOG _debug "CHECK_DIR: $CHECK_DIR"
+	if [ $CHECK_DIR -lt 5 ];then 
+		$LOG _error "Padrao de diretorios invalido."
+		$LOG _warn "Exemplo: /home/usuario/Repositorio/GP-CLIENTE"
+		$LOG _fatal "Abortando a aplicacao!"
+	fi 
+	CMD="pwd | awk -F '/' '{printf \"/%s/%s/%s/%s/%s\" \$1,\$2,\$3,\$4,\$5,\$6}'"
+	$LOG _debug "CMD: $CMD"
+	ETICS_REPO_DIR=`eval "$CMD"`
+	$LOG _debug "ETICS_REPO_DIR: $ETICS_REPO_DIR"
+	
+	CMD="cat \$ETICS_REPO_DIR/\$SUPER_PARENT_DIR/pom.xml | grep \"<cpqd.etics.version>\" | awk -F '>' '{print \$2}' | awk -F '<' '{print \$1}'"
+	$LOG _debug "CMD: $CMD"
+	ETICS_VERSION=`eval "$CMD"`
+	$LOG _info "Versao no repositorio: $ETICS_VERSION"
+	
+	CMD="ls $WILDFLY_DEPLOYMENTS_DIR/*deskmap*.ear | awk -F '-ear-' '{print \$2}' | rev | cut -c5- | rev"
+	$LOG _debug "CMD: $CMD"
+	WILDFLY_VERSION=`eval "$CMD"`
+	$LOG _info "Versao no servidor: $WILDFLY_VERSION"	
+	
+	$LOG _debug "CURR_DIR: $CURR_DIR"	
+	FONTES_DIR=$CURR_DIR
+	POM_FILE="$FONTES_DIR/pom.xml"
+	TARGET_DIR="$FONTES_DIR/target"
+	
+	if [ "$CUSTOM_VALUE" = "operweb" ]; then		
+		MAIN_OPERWEB_DIR="$ETICS_REPO_DIR/oper/fontes/components/operweb"
+		TARGET_DIR="$MAIN_OPERWEB_DIR/target"
+		$LOG _debug "MAIN_OPERWEB_DIR: $MAIN_OPERWEB_DIR"	
+		
+		POM_FILE="$MAIN_OPERWEB_DIR/pom.xml"
+	fi
+
+	$LOG _debug "TARGET_DIR: $TARGET_DIR"	
+	$LOG _debug "POM_FILE: $POM_FILE"
+}
+
+_getArtifactIdValue () {
+	$LOG _debug "_getArtifactIdValue()"
+	
+	if [ ! -f "$POM_FILE" ]; then 
+		$LOG _fatal "Nao foi encontrado o arquivo pom.xml! Abortando a aplicacao."
+	fi
+	
+	CMD="cat $POM_FILE | grep -A15 \"<project\" | sed 's/\s*//g' | grep -2 \"project.artifactId\" | grep \"<artifactId>\" | cut -c13- | rev | cut -c14- | rev"
+	$LOG _debug "CMD: $CMD"
+	ARTIFACT_ID=`eval "$CMD"`
+	$LOG _debug "ARTIFACT_ID: $ARTIFACT_ID"
+	if [ "$ARTIFACT_ID" = "" ];then 
+		$LOG _fatal "Nao foi possivel extrair o artifactId do arquivo pom.xml! Abortando a aplicacao."
+	fi
+}
+
+_runMvnCleanInstall () {
+	$LOG _debug "_runMvnCleanInstall"
+	
+	if [ $FLAG_NC -eq 0 ]; then
+		if [ ! -d $MAVEN_DIR_LOG ]; then
+			CMD="mkdir -p $MAVEN_DIR_LOG"
+			$LOG _debug "CMD: $CMD"
+			eval "$CMD"
+		fi
+		MAVEN_LOG="$MAVEN_LOG_DIR/$MAVEN_LOG_FILE"		
+		#Limpa o log
+		CMD="rm $MAVEN_LOG; touch $MAVEN_LOG"
+		$LOG _debug "CMD: $CMD"
+		eval "$CMD"
+		CMD="xterm -fullscreen -fg green -bg black -bd blue -title \"mvn clean install -DskipTests=true\" -e \"tail -f $MAVEN_LOG & mvn clean install -DskipTests=true -l $MAVEN_LOG -f $POM_FILE\""
+		$LOG _debug "CMD: $CMD"
+		MSG="Compilando $ARTIFACT_ID... "
+		$LOG _info "$MSG" -b
+		eval $CMD
+		CMD_AUX="grep FAILURE $MAVEN_LOG | grep -v BUILD"
+		$LOG _debug "CMD_AUX: $CMD_AUX"
+		RESP=`eval "$CMD_AUX"`
+		if [ "$RESP" = "" ]; then
+			$LOG _info "$MSG" -ok	
+		else 
+			$LOG _info "$MSG" -nok
+			$LOG _error "Falha na compilacao! Log do maven: $MAVEN_LOG"
+			exit 1
+		fi
+	else 
+		$LOG _warn "Compilacao desativada!"
+	fi
+}
+
+
+_checkWildfly () {
+	$LOG _debug "_checkWildfly"
+	
+	# Verifica se ja esta no ar
+	CMD="pgrep debugports"
+	$LOG _debug "CMD: $CMD"
+	PID=`eval "$CMD"`
+	$LOG _debug "PID: $PID"
+	if [ "$PID" != "" ]; then
+		# Mata o jboss para reiniciar
+		CMD="kill -9 $PID"
+		$LOG _debug "CMD: $CMD"
+		eval "$CMD"
+	fi
+}
+
+_getFilesNames () {
+	$LOG _debug "_getFilesNames"
+	
+	JAR_FILE_MAP=()
+	
+	JAR_FILE_AUX=$1
+	$LOG _debug "  JAR_FILE_AUX: $JAR_FILE_AUX"
+	CMD="ls $JAR_FILE_AUX"
+	$LOG _debug "  CMD: $CMD"
+	OLD_JAR_FILE_ARRAY=( `eval "$CMD"` )
+	$LOG _debug "  OLD_JAR_FILE_ARRAY: ${OLD_JAR_FILE_ARRAY[@]}"
+	
+	for OLD_JAR_FILE_AUX in "${OLD_JAR_FILE_ARRAY[@]}"; do
+		CMD="echo $OLD_JAR_FILE_AUX | sed 's|[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*[\-]*[A-Z]*|$WILDFLY_VERSION|'"
+		$LOG _debug "  CMD: $CMD"	
+		NEW_JAR_FILE_AUX=`eval "$CMD"`
+		$LOG _debug "  NEW_JAR_FILE_AUX: $NEW_JAR_FILE_AUX"
+		JAR_FILE_MAP[$OLD_JAR_FILE_AUX]="$NEW_JAR_FILE_AUX"		
+	done
+}
+
+_checkEarToUpdate () {
+	$LOG _debug "_checkEarToUpdate"
+	
+	# Verifica quais ears possuem o artefato gerado.
+	CMD="ls $WILDFLY_DEPLOYMENTS_DIR/*.ear"
+	$LOG _debug "CMD: $CMD"
+	EAR_ARRAY=( `eval "$CMD"` )
+	$LOG _debug "EAR_ARRAY: $EAR_ARRAY"	
+	
+	EAR_ARRAY_TO_UPDATE=()
+	for EAR_FILE in "${EAR_ARRAY[@]}"; do
+		CMD="unzip -l $EAR_FILE | grep $ARTIFACT_ID | awk '{print \$4}'"
+		$LOG _debug "CMD: $CMD"
+		JAR_FINDED=`eval "$CMD"`
+		$LOG _debug "JAR_FINDED: $JAR_FINDED"
+		
+		if [ "$JAR_FINDED" != "" ]; then			
+			EAR_ARRAY_TO_UPDATE+=("$EAR_FILE")
+		fi 
+	done
+	$LOG _debug "EAR_ARRAY_TO_UPDATE: ${EAR_ARRAY_TO_UPDATE[@]}"
+}
+
+_updateEarFile () {
+	$LOG _debug "_updateEarFile"
+	
+	# Limpa e cria pasta lib auxiliar
+	if [ -d "$WILDFLY_DEPLOYMENTS_DIR/lib" ]; then
+		CMD="rm -fr $WILDFLY_DEPLOYMENTS_DIR/lib"
+		$LOG _debug "  CMD: $CMD"
+		eval $CMD
+	fi
+	CMD="mkdir $WILDFLY_DEPLOYMENTS_DIR/lib"
+	$LOG _debug "  CMD: $CMD"
+	eval $CMD
+		
+	for OLD_JAR_FILE in ${!JAR_FILE_MAP[@]}; do
+	
+		# Renomeia os arquivos jar
+		NEW_JAR_FILE=${JAR_FILE_MAP[${OLD_JAR_FILE}]}
+		if [ "$OLD_JAR_FILE" != "$NEW_JAR_FILE" ]; then
+			CMD="mv $OLD_JAR_FILE $NEW_JAR_FILE"
+			$LOG _debug "  CMD: $CMD"
+			eval $CMD
+		fi
+
+		# Atualiza o ear
+		for WEBDESKMAPREPORT_EAR_FILE in "${EAR_ARRAY_TO_UPDATE[@]}"; do
+		
+			CMD="echo $WEBDESKMAPREPORT_EAR_FILE | awk -F'/' '{print \$NF}'"
+			$LOG _debug "  CMD: $CMD"
+			WEBDESKMAPREPORT_EAR_FILE_ONLY=`eval "$CMD"`
+			$LOG _debug "  WEBDESKMAPREPORT_EAR_FILE_ONLY: $WEBDESKMAPREPORT_EAR_FILE_ONLY"
+		
+			# Verifica onde vai ser atualizado o jar (raiz ou pasta lib)
+			CMD="echo $NEW_JAR_FILE | awk -F'/' '{print \$NF}'"
+			$LOG _debug "  CMD: $CMD"
+			NEW_JAR_FILE_ONLY=`eval "$CMD"`
+			$LOG _debug "  NEW_JAR_FILE_ONLY: $NEW_JAR_FILE_ONLY"
+			
+			CMD="unzip -l $WEBDESKMAPREPORT_EAR_FILE | grep $NEW_JAR_FILE_ONLY | grep lib"
+			$LOG _debug "  CMD: $CMD"
+			CHECK_DIR_LIB=`eval "$CMD"`
+			$LOG _debug "  CHECK_DIR_LIB: $CHECK_DIR_LIB"
+		
+			if [ "$CHECK_DIR_LIB" != "" ]; then			
+				# Deve ser atualizado na pasta lib
+				# Copia o jar para a pasta lib
+				CMD="cp $NEW_JAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+				$LOG _debug "  CMD: $CMD"
+				eval $CMD
+				
+				# Atualiza ear.
+				CMD="7z a $WEBDESKMAPREPORT_EAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/ >/dev/null 2>&1" #/lib
+				$LOG _debug "  CMD: $CMD"
+				MSG="Atualizando arquivo $NEW_JAR_FILE_ONLY na pasta lib do $WEBDESKMAPREPORT_EAR_FILE_ONLY..."
+				$LOG _info "$MSG" -b
+				eval $CMD
+				$LOG _info "$MSG" -ok
+				
+				# Apagando conteudo do diretorio lib aux.
+				CMD="rm -f $WILDFLY_DEPLOYMENTS_DIR/lib/*"
+				$LOG _debug "  CMD: $CMD"
+				eval $CMD
+			else 
+				# Deve ser atualizado na raiz (se houver)
+				CMD="unzip -l $WEBDESKMAPREPORT_EAR_FILE | grep $NEW_JAR_FILE_ONLY "
+				$LOG _debug "  CMD: $CMD"
+				CHECK_DIR=`eval "$CMD"`
+				$LOG _debug "  CHECK_DIR: $CHECK_DIR"
+				if [ "$CHECK_DIR" != "" ]; then
+					# Deve ser atualizado na pasta raiz				
+					# Atualiza ear.
+					CMD="7z a $WEBDESKMAPREPORT_EAR_FILE $NEW_JAR_FILE >/dev/null 2>&1" # raiz
+					$LOG _debug "CMD: $CMD"
+					MSG="Atualizando arquivo $NEW_JAR_FILE_ONLY na pasta raiz do $WEBDESKMAPREPORT_EAR_FILE_ONLY..."
+					$LOG _info "$MSG" -b
+					eval $CMD
+					$LOG _info "$MSG" -ok
+				fi				
+			fi
+		done
+	done
+	
+	# Apagando diretorio lib aux.
+	CMD="rm -fr $WILDFLY_DEPLOYMENTS_DIR/lib"
+	$LOG _debug "  CMD: $CMD"
+	eval $CMD
+}
+
+_updateEarFileOperweb () {
+	$LOG _debug "_updateEarFileOperweb"
+	
+	# Alterando os nomes dos arquivos para a versao do wildfly.
+	if [ "$OLD_OPERWEB_CORE_JAR_FILE" != "$NEW_OPERWEB_CORE_JAR_FILE" ]; then
+		CMD="mv $OLD_OPERWEB_CORE_JAR_FILE $NEW_OPERWEB_CORE_JAR_FILE"	
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	if [ "$OLD_OPERWEB_WA_POJOS_JAR_FILE" != "$NEW_OPERWEB_WA_POJOS_JAR_FILE" ]; then
+		CMD="mv $OLD_OPERWEB_WA_POJOS_JAR_FILE $NEW_OPERWEB_WA_POJOS_JAR_FILE"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	if [ "$OLD_OPERWEB_WA_WEB_WAR_FILE" != "$NEW_OPERWEB_WA_WEB_WAR_FILE" ]; then
+		CMD="mv $OLD_OPERWEB_WA_WEB_WAR_FILE $NEW_OPERWEB_WA_WEB_WAR_FILE"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	
+	# Atualizando o cpqd-configuration.jar com o arquivo CPqD-OperWeb123.cache
+	CMD="7z a $WILDFLY_DEPLOYMENTS_DIR/$CONFIGURATION_JAR_FILE $MAIN_OPERWEB_DIR/$MODEL_TARGET_DIR/$MODEL_CACHE_FILE >/dev/null 2>&1"
+	$LOG _debug "CMD: $CMD"
+	MSG="Atualizando arquivo $WILDFLY_DEPLOYMENTS_DIR/$CONFIGURATION_JAR_FILE ..."
+	$LOG _info "$MSG" -b
+	eval $CMD
+	$LOG _info "$MSG" -ok
+
+	# Atualizando a pasta lib do ear.
+	if [ -d "$WILDFLY_DEPLOYMENTS_DIR/lib" ]; then
+		CMD="rm -fr $WILDFLY_DEPLOYMENTS_DIR/lib"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	CMD="mkdir $WILDFLY_DEPLOYMENTS_DIR/lib"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+
+	# Copia os jars para a pasta lib para serem atualizados.
+	CMD="cp $NEW_OPERWEB_CORE_JAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+	CMD="cp $NEW_OPERWEB_WA_POJOS_JAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+
+	# Atualiza o ear
+	WEBDESKMAPREPORT_EAR_FILE="$WILDFLY_DEPLOYMENTS_DIR/cpqd-etics-webdeskmapreport-ear-$WILDFLY_VERSION.ear"
+	$LOG _debug "WEBDESKMAPREPORT_EAR_FILE: $WEBDESKMAPREPORT_EAR_FILE"
+	
+	CMD="7z a $WEBDESKMAPREPORT_EAR_FILE $NEW_OPERWEB_WA_WEB_WAR_FILE >/dev/null 2>&1" #/raiz
+	$LOG _debug "CMD: $CMD"
+	MSG="Atualizando arquivo war do ear ..."
+	$LOG _info "$MSG" -b
+	eval $CMD
+	$LOG _info "$MSG" -ok
+	
+	CMD="7z a $WEBDESKMAPREPORT_EAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/ >/dev/null 2>&1" #/lib
+	$LOG _debug "CMD: $CMD"
+	MSG="Atualizando arquivos jar na pasta lib do ear ..."
+	$LOG _info "$MSG" -b
+	eval $CMD
+	$LOG _info "$MSG" -ok
+	
+	# Apagando diretorio lib aux.
+	CMD="rm -fr $WILDFLY_DEPLOYMENTS_DIR/lib"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+}
+
+_runWildfly () {
+	$LOG _debug "_runWildfly"
+	if [ $FLAG_NS -eq 0 ];then 
+		CMD="xterm -fg green -bg black -bd blue -title \"WF820_ports-0$WILDFLY_PORT_NUM\" -e $WILDFLY_EXE &"
+		$LOG _debug "CMD: $CMD"
+		MSG="Iniciando $WILDFLY_EXE... "
+		$LOG _info "$MSG" -b
+		eval $CMD
+		$LOG _info "$MSG" -ok	
+	else
+		$LOG _warn "Inicializacao do wildfly desativada!"
+	fi
+}
+
+###############################################################################
+# MAIN
+###############################################################################
+$LOG _info "Iniciando..."
+
+# Recupera os parametros
+_getParam $@
+
+# Valida parametros
+_checkParam
+
+# Recupera informacoes auxiliares
+_getOthersVars
+
+# Recupera o artifactId da aplicacao
+_getArtifactIdValue
+
+# Mata o wildfly, caso esteja no ar.
+_checkWildfly
+
+# Gera o operweb.
+_runMvnCleanInstall
+
+if [ "$CUSTOM_VALUE" = "" ]; then
+	# Recupera todos os nomes dos arquivos envolvidos na atualizacao.
+	_getFilesNames "$TARGET_DIR/*.jar"
+
+	# Recupera todos os ears que serao atualizados
+	_checkEarToUpdate
+	
+	# Faz a atualizacao  dos arquivos.
+	_updateEarFile
+else 
+	if [ "$CUSTOM_VALUE" = "operweb" ]; then
+		# Recupera todos os nomes dos arquivos envolvidos na atualizacao.
+		_getFilesNames "$MAIN_OPERWEB_DIR/$CORE_TARGET_DIR/cpqd-etics-operweb-core-*.jar"
+		OLD_OPERWEB_CORE_JAR_FILE="${!JAR_FILE_MAP[@]}"
+		$LOG _debug "OLD_OPERWEB_CORE_JAR_FILE: $OLD_OPERWEB_CORE_JAR_FILE"
+		NEW_OPERWEB_CORE_JAR_FILE="${JAR_FILE_MAP[${OLD_OPERWEB_CORE_JAR_FILE}]}"
+		$LOG _debug "NEW_OPERWEB_CORE_JAR_FILE: $NEW_OPERWEB_CORE_JAR_FILE"
+
+		_getFilesNames "$MAIN_OPERWEB_DIR/$WEBAPPLICATION_JAR_TARGET_DIR/cpqd-etics-operweb-webapplication-jar-*-web.jar"
+		OLD_OPERWEB_WA_POJOS_JAR_FILE="${!JAR_FILE_MAP[@]}"
+		$LOG _debug "OLD_OPERWEB_WA_POJOS_JAR_FILE: $OLD_OPERWEB_WA_POJOS_JAR_FILE"
+		NEW_OPERWEB_WA_POJOS_JAR_FILE="${JAR_FILE_MAP[${OLD_OPERWEB_WA_POJOS_JAR_FILE}]}"
+		$LOG _debug "NEW_OPERWEB_WA_POJOS_JAR_FILE: $NEW_OPERWEB_WA_POJOS_JAR_FILE"
+	
+		_getFilesNames "$MAIN_OPERWEB_DIR/$WEBAPPLICATION_WEB_TARGET_DIR/cpqd-etics-operweb-webapplication-web-*.war"
+		OLD_OPERWEB_WA_WEB_WAR_FILE="${!JAR_FILE_MAP[@]}"
+		$LOG _debug "OLD_OPERWEB_WA_WEB_WAR_FILE: $OLD_OPERWEB_WA_WEB_WAR_FILE"
+		NEW_OPERWEB_WA_WEB_WAR_FILE="${JAR_FILE_MAP[${OLD_OPERWEB_WA_WEB_WAR_FILE}]}"
+		$LOG _debug "NEW_OPERWEB_WA_WEB_WAR_FILE: $NEW_OPERWEB_WA_WEB_WAR_FILE"
+		
+		# Faz a atualizacao  dos arquivos do operweb.
+		_updateEarFileOperweb
+	fi
+fi
+
+# Roda o wildfly
+_runWildfly
+
+# Finalizado
+$LOG _info "Finalizado."
+exit 0

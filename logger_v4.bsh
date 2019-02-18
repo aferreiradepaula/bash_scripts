@@ -23,6 +23,9 @@
 #       - Metodo _print e recuperadores de cores.
 #       - Correcao nos codigos das constantes de cores.
 #
+# v4 :: Melhoria
+#       - Parametro para ver tamanho do arquivo.
+#
 ###############################################################################
 
 
@@ -30,7 +33,8 @@
 LEVEL=${LEVEL="info"}
 
 # Comandos pre-definidos (facilitadores)
-BUSY="busy.bsh"
+BUSY="busy_v2.bsh"
+PROGRESS=""
 
 # Tabela de cores
 #-----------------------------------------
@@ -92,10 +96,16 @@ _FGSC () {
 _info () {
 	P1=$1
 	P2=$2
+	P3=$3
 	if [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
-		if [ "$P2" = "-b" ]; then			
-			MSG="[${FG_VERDE}INFO${FG_SC}]  :: $P1"
-			$BUSY "$MSG" &
+		if [ "$P2" = "-b" ] || [ "$P2" = "-bf" ]; then
+			if [ "$P2" = "-b" ]; then
+				MSG="[${FG_VERDE}INFO${FG_SC}]  :: $P1"
+				$BUSY "$MSG" &
+			else
+				MSG="[${FG_VERDE}INFO${FG_SC}]  :: $P1"
+				$BUSY "$MSG" "$P3" &
+			fi
 		else
 			if [ "$P2" = "-n" ]; then
 				printf "[${FG_VERDE_C}ANSW${FG_SC}]  :: $P1"
@@ -105,9 +115,17 @@ _info () {
 					CMD="ps -elf | grep busy | grep -v grep | awk '{print \$4}'"
 					BUSYPID=`eval "$CMD"`
 					kill -13 $BUSYPID
-					printf "\r[${FG_VERDE}INFO${FG_SC}]  :: $P1 ${FG_LARANJA}ok${FG_SC}\n"
-				else 			
-					printf "[${FG_VERDE}INFO${FG_SC}]  :: $P1\n"
+					printf "\r[${FG_VERDE}INFO${FG_SC}]  :: $P1 ${FG_VERDE_C}ok${FG_SC}\n"
+				else 
+					if [ "$P2" = "-nok" ]; then
+						sleep 1
+						CMD="ps -elf | grep busy | grep -v grep | awk '{print \$4}'"
+						BUSYPID=`eval "$CMD"`
+						kill -13 $BUSYPID
+						printf "\r[${FG_VERDE}INFO${FG_SC}]  :: $P1 ${FG_VERMELHO}nok${FG_SC}\n"
+					else					
+						printf "[${FG_VERDE}INFO${FG_SC}]  :: $P1\n"
+					fi
 				fi
 			fi
 		fi
@@ -123,6 +141,15 @@ _error () {
 _warn () {
 	if [ "$LEVEL" = "warning" ] || [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
 		printf "[${FG_AMARELO}WARN${FG_SC}]  :: $1\n"
+	fi
+}
+
+_fatal () {
+	if [ "$LEVEL" = "warning" ] || [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ] || [ "$LEVEL" = "fatal" ]; then
+		printf "[${FG_VERMELHO}FATAL${FG_SC}]  :: $1\n"
+		CMD="kill -9 $PPID"		
+		eval $CMD
+		exit 1
 	fi
 }
 

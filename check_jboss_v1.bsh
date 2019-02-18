@@ -1,0 +1,32 @@
+#! /bin/bash
+
+JBOSS_BASE_DIR=$1
+JBOSS_PORTS=$2
+
+FLAG_SAI=0
+FLAG_FALHA=0
+FLAG_SUCESSO=0
+while [ $FLAG_SAI -ne 1 ]
+do
+  for ear in `ls $JBOSS_BASE_DIR/deployments/*.ear`; do
+	FAILED_EAR="$ear.failed"
+	if [ -f $FAILED_EAR ]; then
+		MSG_FALHA=`cat $FAILED_EAR`
+		FLAG_FALHA=1
+	fi
+	QTD_EAR=`ls -la $JBOSS_BASE_DIR/deployments/*.ear | wc -l`
+	QTD_DEPLOYED=`ls -la $JBOSS_BASE_DIR/deployments/*.ear.deployed | wc -l`
+	if [ $QTD_EAR -eq $QTD_DEPLOYED ]; then		
+		FLAG_SUCESSO=1
+	fi
+  done  
+  if [ $FLAG_FALHA -eq 1 ]; then
+	notify-send "FALHA NO DEPLOY" "$MSG_FALHA"
+	FLAG_SAI=1
+  fi
+  if [ $FLAG_SUCESSO -eq 1 ]; then
+	notify-send "SUCESSO NO DEPLOY" "Wildfly na $JBOSS_PORTS está no ar..."
+	FLAG_SAI=1
+  fi  
+  sleep 2
+done

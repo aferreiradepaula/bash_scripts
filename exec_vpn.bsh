@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sudo openconnect --protocol=gp vpncpqd.cpqd.com.br -u adrianof
