@@ -1,9 +1,0 @@
-#!/bin/bash
-
-export JAVA_HOME=/usr/java/jdk1.8.0_181
-if [ $?PATH_ORI ]; then
-	export PATH_ORI=${PATH}
-fi
-export PATH=${JAVA_HOME}/bin:${PATH_ORI}
-
-/l/disk0/adrianof/work/ide/eclipse/eclipse
