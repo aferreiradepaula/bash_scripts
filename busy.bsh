@@ -1,0 +1,29 @@
+#! /bin/bash
+# busy - print status indicator
+#
+# usage:
+#       busy.bsh& busypid=$!
+#       somelongrunningcommand
+#       kill $busypid >/dev/null 2>&1
+
+trap ctrl_c INT
+
+function ctrl_c() {
+   printf "\r$msg | Deseja parar? (S/N) "
+   read BREAK
+   if [ "$BREAK" == "S" ] || [ "$BREAK" == "s" ]; then
+		exit 1
+   fi
+}
+
+Indicators=("|" "/" "-" "\\")
+n=4
+i=0
+
+msg=$1
+while true
+do
+    printf "\r$msg ${Indicators[i]}"
+    i=$(((i+1)%n))
+    sleep .25
+done

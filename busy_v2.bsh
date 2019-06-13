@@ -1,0 +1,43 @@
+#! /bin/bash
+# busy - print status indicator
+#
+# usage:
+#       busy.bsh& busypid=$!
+#       somelongrunningcommand
+#       kill $busypid >/dev/null 2>&1
+#
+# v2 :: Mostra o tamanho do arquivo em tempo real.
+
+trap ctrl_c INT
+
+function ctrl_c() {
+   printf "\r$msg | Deseja parar? (S/N) "
+   read BREAK
+   if [ "$BREAK" == "S" ] || [ "$BREAK" == "s" ]; then
+		exit 1
+   fi
+}
+
+Indicators=("|" "/" "-" "\\")
+n=4
+i=0
+
+msg=$1
+arq=$2
+cmd_du=""
+
+if [ -f "$arq" ]; then 
+	cmd_du="du -k $arq"
+fi
+
+while true
+do
+	if [ "$cmd_du" != "" ]; then
+		msg_du=`eval "$cmd_du"`
+		printf "\r$msg ${Indicators[i]} :: $msg_du Kb"
+    else 
+		printf "\r$msg ${Indicators[i]}"
+    fi
+    i=$(((i+1)%n))
+    sleep .25
+done

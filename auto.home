@@ -1,0 +1,8 @@
+#!/bin/sh
+#This file is managed by Puppet. To insert local mount change server yaml file at puppet master server.
+/sbin/automap "$@" -file - -yp auto.home <<EOF
+  adrianof  localhost:/l/disk0:&
+  gscdsso  localhost:/l/disk0:&
+  oracle11203_64  localhost:/l/disk0:&
+  ipscate         localhost:/l/disk0:&
+  EOF

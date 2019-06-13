@@ -1,0 +1,876 @@
+#!/bin/bash
+
+###############################################################################
+#
+# set-dir-etics.bsh :: Set Directories Etics
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Seta o ambiente de uma account de acordo com um padrão de diretorios           
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao csh;
+#       - Recupera os arquivos da repodsso e monta a acount;
+# 
+# v2 :: Versao bash:
+#       - Modularizacao (criacao de funcoes internas);
+#       - Mensagens de debug, info, warning, error;
+#       - Recupera o repositorio de fontes legacy;
+#       - Executa os comandos config_all.sh e config_user.sh;
+#       - Executa o configurador com dados pre-definidos, nao configuraveis;
+#       - Cria e atualiza o arquivo .sde_alias para facilitar a reutilizacao do ambiente;
+#       - Cria os alias cpbin e cplib para copiar os binarios gerados para a account;
+# 
+# v3 :: Melhoria:
+#       - Parametro de remocao;
+# 
+# v4 :: Melhoria:
+#       - Troca do parametro de remocao pelo de atualizacao do arquivo de ambientes.
+#
+# v5 :: Alteracoes:
+#       - Adaptacao a mudanca de diretorios dos branches separados.
+#
+# v6 :: Melhoria:
+#       - Adaptações para linha 9.
+#
+# v7 :: Alteracoes:
+#       - Alteracao para funcionar 100% ambiente linux;
+#       - Inclusao do parametro para ver o tamanho do aquivo enquanto baixa (não funcionou).
+#
+# v8 :: Refatoramento e melhorias (Final):														:: Implementado :: Testado
+#       - Utilizacao do novo sistema de log: logger_v5.bsh
+#         * Parametros para mudanca de cor da mensagem;											:: 				:: 
+#         * Parametros para utilizacao de barra de progresso (adicional ao barra circulatorio);	:: 				:: 
+#         * Aviso na area de notificacao no ubuntu;												:: 				:: 
+#         * Novo tipo de aviso "fatal" que aborta o script (implementado na v4);				:: OK			:: OK
+#       - Utilizacao de variaveis globais para facilitar o entendimento do codigo;				:: OK			:: OK 
+#       - Configuracao automatica para a account e server;										:: account		:: 
+#       - Configuracao default para cliente recuperada de arquivo								::				::
+#       - Geracao de arquivo defalt para cliente a partir de uma configuracao (configurador)    ::              ::
+#       - Novos parametros:  
+#         * host da account/porta da account;													:: OK*			:: OK*
+#         * host wildfly/porta wildfly;															:: OK*			:: OK*
+#         * parametro para iniciar account;														:: 				:: 
+#         * parametro para iniciar wildfly;														:: 				:: 
+#         * banco/instancia para execucao da geracao dos arquivos de configuracao (dbmanager);	:: 				:: 
+#         * parametro de simulacao para eval													:: OK			:: OK
+#         * parametro de diretorio de instalacao 												:: OK			::
+#       - Volta do parametro de remocao da conta;												:: 				:: 
+#       - Melhoria no uso de parametros															:: OK			:: OK
+#       - Inclusao do comando dialog para gerar ihm.											:: 				:: 
+#       - Utilizar log para rotina _info                                                        :: OK			:: OK
+#
+###############################################################################
+
+# Parametros validos
+OPTIONS=u:c:hsdp:a:w:
+LONGOPTS=url:,client:,help,simulate,debug,prefix:,hpa:,hpw:
+
+# Nivel de log (info, debug, error, warning, fatal) - default: info
+LEVEL=${LEVEL="info"}
+# Parametro para simulacao
+SIMULATE=n
+# Parametro de url
+URL_PACKAGE=-
+# Parametro de help
+HELP=n
+# Cliente
+CLIENTE=-
+# Diretorio do pacote
+DIR_PACKAGE=-
+# HOST PORTA ACCOUNT
+HOST_PORT_ACCOUNT=-
+# HOST PORTA WILDFLY
+HOST_PORT_WILDFLY=-
+
+# Dependencia de scripts externos
+LOG="logger_v4.bsh"
+BUSY="busy_v2.bsh"
+
+# Transforma falhas (bugs) em erros.
+set -o errexit -o pipefail -o noclobber -o nounset
+
+JAVA_HOME_L8=${JAVA_HOME_L8="/usr/java/jdk1.7.0_80"}
+
+JAVA_HOME_L9=${JAVA_HOME_L9="/usr/java/jdk1.8.0_181"}
+
+# Constantes globais
+LIST_CLIENTES="bra_vivo chi_tlf col_tlf per_tlf bra_tim bra_copel bra_sercomtel bra_claro bra_cpfl bra_telebras arg_arsat ury_antel usa_msc "
+ARQ_CONF_DEFAULT="ant.install.properties"
+ARQ_ALIAS_SDE=".sde_alias"
+
+FONTES_DIR="/home/${USER}/Repositorios"
+FONTES_VIVO_DIR="${FONTES_DIR}/GP-VIVO"
+FONTES_TIM_DIR="${FONTES_DIR}/GP-TIM"
+FONTES_CLARO_DIR="${FONTES_DIR}/GP-CLARO"
+FONTES_COPEL_DIR="${FONTES_DIR}/GP-COPEL"
+FONTES_TELEBRAS_DIR="${FONTES_DIR}/GP-TELEBRAS"
+FONTES_SERCOMTEL_DIR="${FONTES_DIR}/GP-SERCOMTEL"
+FONTES_MSC_DIR="${FONTES_DIR}/GP-MSC"
+FONTES_ANTEL_DIR="${FONTES_DIR}/GP-ANTEL"
+FONTES_ARSAT_DIR="${FONTES_DIR}/GP-ARSAT"
+FONTES_CPFL_DIR="${FONTES_DIR}/GP-CPFL"
+FONTES_COLOMBIA_DIR="${FONTES_DIR}/GP-COLOMBIA"
+FONTES_PERU_DIR="${FONTES_DIR}/GP-PERU"
+FONTES_CHILE_DIR="${FONTES_DIR}/GP-CHILE"
+
+LANG_BR=pt-br
+LANG_ES=es
+LANG_EN=en-us
+
+LANG_DIR=""
+
+PARAM_LIST_SERVER=""
+PARAM_LIST_ACCOUNT=""
+
+PARAM_VALUE_LIST_SERVER=""
+PARAM_VALUE_LIST_ACCOUNT=""
+
+ARQ_ACCOUNT=""
+
+ACCOUNT_HOST=""
+ACCOUNT_PORT=""
+
+WILDFLY_HOST=""
+WILDFLY_PORT=""
+
+# Constantes para configuracao account
+account_server_port="account.server.port"
+java_home_path="java.home.path"
+oracle_home_path="oracle.home.path"
+mq_client_home_path="mq.client.home.path"
+appserver_name="appserver.name"
+appserver_connections="appserver.connections"
+appserver_user_client_username="appserver.user.client.username"
+appserver_user_client_password="appserver.user.client.password"
+
+# ACCOUNT DEFAULT
+declare -A PARAM_LIST_ACCOUNT
+PARAM_LIST_ACCOUNT[$account_server_port]="10550"
+PARAM_LIST_ACCOUNT[$java_home_path]="/usr/java/jdk1.7.0_80"
+PARAM_LIST_ACCOUNT[$oracle_home_path]="/home/oracle11203_64"
+PARAM_LIST_ACCOUNT[$mq_client_home_path]="/opt/mqm"
+PARAM_LIST_ACCOUNT[$appserver_name]="wildfly-eap"
+PARAM_LIST_ACCOUNT[$appserver_connections]="mcity30:8080"
+PARAM_LIST_ACCOUNT[$appserver_user_client_username]="appclient"
+PARAM_LIST_ACCOUNT[$appserver_user_client_password]="appclient1@cpqd"
+
+# Constantes para configuracao server
+
+
+
+# SERVER DEFAULT
+declare -A PARAM_LIST_SERVER
+
+
+# Funcoes
+_intro() {	
+	$LOG _info "\n 
+	*
+	*                        *** ULTRA Etics AMB Setator ***
+	*
+	*      Seta o ambiente de uma account/server de acordo com um padrao de diretorios e 
+	*      configura automaticamente a account e server.
+	*
+	**************************************************************************************\n\n"
+}
+
+_uso () {
+	$LOG _info "	*
+	* Uso: $0 <-u URL_PACKAGE> <-c CLIENTE> [-h] [-p] [-s] [-d] [-a] [-w]
+	*
+	**************************************************************************************
+	*  Parametros obrigatorios:
+	*	
+	*  -u, --url <URL_PACKAGE> :: Endereco do diretorio raiz da pacote
+	*                             Exemplo: http://repodsso/gc/BUILDS/ETICS/8.14.0/8.14.0.0.0
+	*
+	*  -c, --client <CLIENTE>  :: Cliente relacionado a esse pacote:
+	*                             Valores válidos: $LIST_CLIENTES
+	*
+	**************************************************************************************
+	*  Parametros opcionais:
+	*
+	*  -h, --help      :: Imprime o uso e sai.
+	*
+	*  -p, --prefix	   :: Diretorio de instalacao.
+	*
+	*  -s, --simulate  :: Modo simulado;
+	*
+	*  -d, --debug     :: Ativa modo de debug;
+	*                     (Similar a setar a variavel de ambiente LEVEL=debug)
+	*  
+	*  -a, --hpa       :: Host e Porta da account (Ex: vmetios:12550); 
+	*
+	*  -w, --hpw       :: Host e Porta do wildfly (Ex: mcity30:8080);
+	*                     (onde o segundo digito determina o diretorio ports que sera instalado). 
+	*                  	
+	**************************************************************************************\n\n"
+  exit 0
+}
+
+_getParam() {	
+	! getopt --test > /dev/null
+	if [[ ${PIPESTATUS[0]} -ne 4 ]]; then
+		$LOG _fatal "Falha no comando 'getopt --test'! Nao sera possivel proceguir!"
+	fi
+
+	# Nenhum parametro foi informado.
+	if [ $# -eq 0 ]; then
+		_intro
+		_uso
+		exit 1
+	fi
+
+	! PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
+	if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+		$LOG _fatal "Parametro '-u ou --url URL_PACKAGE' e obrigatorio!"
+	fi
+
+	# Le a entrada pelo getopt
+	eval set -- "$PARSED"
+
+	# Verificando parametros
+	while true; do
+		case "$1" in
+			-h|--help)
+				HELP=y
+				shift
+				;;
+			-s|--simulate)
+				SIMULATE=y
+				shift
+				;;
+			-d|--debug)
+				export LEVEL="debug"
+				shift
+				;;
+			-u|--url)
+				URL_PACKAGE="$2"
+				shift 2
+				;;
+			-p|--prefix)
+				DIR_PACKAGE="$2"
+				shift 2
+				;;
+			-c|--client)
+				CLIENTE="$2"
+				shift 2
+				;;
+			-a|--hpa)
+				HOST_PORT_ACCOUNT="$2"
+				shift 2
+				;;
+			-w|--hpw)
+				HOST_PORT_WILDFLY="$2"
+				shift 2
+				;;
+			--)
+				shift
+				break
+				;;
+			*)
+				$LOG _fatal "Parametros invalidos!"	
+				;;
+		esac
+	done
+
+	$LOG _debug "  |_getParam() : HELP=$HELP; SIMULATE=$SIMULATE; URL_PACKAGE=$URL_PACKAGE; CLIENTE=$CLIENTE; DIR_PACKAGE=$DIR_PACKAGE; HOST_PORT_ACCOUNT=$HOST_PORT_ACCOUNT; HOST_PORT_WILDFLY=$HOST_PORT_WILDFLY"
+
+	if [ "$HELP" = "y" ]; then 
+		_intro
+		_uso
+		exit 0
+	fi
+	
+	if [ "$URL_PACKAGE" = "" ]; then
+		$LOG _fatal "Parametro '-u' e obrigatorio!"
+	fi
+	
+	if [ "$CLIENTE" = "" ]; then
+		$LOG _fatal "Parametro '-c' e obrigatorio!"
+	else
+		# Cliente foi preenchido como parametro
+		if [ ! -z "${LIST_CLIENTES##*$CLIENTE*}" ]; then
+			# Cliente invalido.
+			$LOG _fatal "Cliente informado nao eh valido."
+		fi
+	fi
+	
+	if [ "$DIR_PACKAGE" != "" ]; then
+		# Se foi informado um diretorio para a instalacao, verificar se existe.
+		if [ ! -d $DIR_PACKAGE ]; then
+			$LOG _fatal "Diretorio de instalacao nao existe!"
+		fi
+	fi
+	
+	if [ "$HOST_PORT_ACCOUNT" != "-" ]; then
+		if [ -z "${HOST_PORT_ACCOUNT##*:*}" ]; then 
+			CMD="echo $HOST_PORT_ACCOUNT | awk -F ':' '{print \$1}'"
+			ACCOUNT_HOST=$(eval "$CMD") && echo ""
+			$LOG _debug "   |_ACCOUNT_HOST = $ACCOUNT_HOST"
+			if [ "$ACCOUNT_HOST" == "" ] || [ "$ACCOUNT_HOST" == "$HOST_PORT_ACCOUNT" ]; then
+				$LOG _warn "Host da account invalido! Utilizando localhost como default."
+				ACCOUNT_HOST="localhost"
+			fi
+			
+			CMD="echo $HOST_PORT_ACCOUNT | awk -F ':' '{print \$2}'"
+			ACCOUNT_PORT=$(eval "$CMD") && echo ""
+			$LOG _debug "   |_ACCOUNT_PORT = $ACCOUNT_PORT"
+			if [ "$ACCOUNT_PORT" == "" ]; then
+				$LOG _warn "Porta da account invalido! Utilizando 10550 como default."				
+				ACCOUNT_PORT="10550"
+			fi
+		else
+			$LOG _fatal "Parametro '-a' fora do padrão \"host:port\"!"
+		fi
+	fi
+	
+	if [ "$HOST_PORT_WILDFLY" != "-" ]; then
+		if [ -z "${HOST_PORT_WILDFLY##*:*}" ]; then 
+			CMD="echo $HOST_PORT_WILDFLY | awk -F ':' '{print \$1}'"
+			WILDFLY_HOST=$(eval "$CMD") && echo ""
+			$LOG _debug "   |_WILDFLY_HOST= $WILDFLY_HOST"
+			if [ "$WILDFLY_HOST" == "" ] || [ "$WILDFLY_HOST" == "$HOST_PORT_WILDFLY" ]; then
+				$LOG _warn "Host do wildfly invalido! Utilizando localhost como default."
+				WILDFLY_HOST="localhost"
+			fi
+			
+			CMD="echo $HOST_PORT_WILDFLY | awk -F ':' '{print \$2}'"
+			WILDFLY_PORT=$(eval "$CMD") && echo ""
+			$LOG _debug "   |_WILDFLY_PORT = $WILDFLY_PORT"
+			if [ "$WILDFLY_PORT" == "" ]; then
+				$LOG _warn "Porta do wildfly invalido! Utilizando 8080 como default."				
+				WILDFLY_PORT="8080"
+			fi
+		else
+			$LOG _fatal "Parametro '-w' fora do padrão \"host:port\"!"
+		fi
+	fi
+}
+
+_setLangDir() {	
+	if [ "$CLIENTE" = "bra_vivo" ] || [ "$CLIENTE" = "bra_tim" ] || [ "$CLIENTE" = "bra_copel" ] || [ "$CLIENTE" = "bra_sercomtel" ] || [ "$CLIENTE" = "bra_claro" ] || [ "$CLIENTE" = "bra_telebras" ] || [ "$CLIENTE" = "bra_cpfl" ]; then
+		LANG_DIR=$LANG_BR
+	fi
+	if [ "$CLIENTE" = "arg_arsat" ] || [ "$CLIENTE" = "ury_antel" ] || [ "$CLIENTE" = "col_tlf" ] || [ "$CLIENTE" = "chi_tlf" ] || [ "$CLIENTE" = "per_tlf" ]; then
+		LANG_DIR=$LANG_ES
+	fi
+	if [ "$CLIENTE" = "usa_msc" ]; then
+		LANG_DIR=$LANG_EN
+	fi
+	$LOG _debug "  |_setLangDir() : LANG_DIR=$LANG_DIR"
+}
+
+_createMainInstalattion() {
+	$LOG _debug "  |_createMainInstalattion()"	
+	if [ ! -d $URL_PACKAGE ]; then
+		MAIN_URL=$URL_PACKAGE
+		
+		# Recuperando a versao e verificando se URL e valida.		
+		CMD="echo '$MAIN_URL' | awk -F'ETICS/' '{printf \$2}'"		
+		$LOG _debug "    |_CMD: $CMD"
+		VERSAO=$(eval "$CMD") && echo ""		
+		$LOG _debug "    |_VERSAO: $VERSAO"		
+		if [ "$VERSAO" != "" ]; then
+			# Verifica em qual linha pertence para atualizar o JAVA_HOME
+			_updateJavaHomeByMainVersion $VERSAO
+			
+			# Vai para o diretorio home do usuario.
+			cd
+			
+			# Baixa account
+			if [ "$DIR_PACKAGE" != "" ]; then
+				ACCOUNT_DIR=$DIR_PACKAGE/account
+			else
+				# Diretorio de instalacao nao foi informado (Utilizar um padrao)
+				ACCOUNT_DIR=$PWD/ETICS/$VERSAO/$CLIENTE/account
+			fi
+			$LOG _debug "    |_ACCOUNT_DIR: $ACCOUNT_DIR"		
+			_createAccount $ACCOUNT_DIR			
+				
+			# Baixa server
+			if [ "$DIR_PACKAGE" != "" ]; then
+				SERVER_DIR=$DIR_PACKAGE/server
+			else
+				SERVER_DIR=$PWD/ETICS/$VERSAO/$CLIENTE/server
+			fi
+			$LOG _debug "    |_SERVER_DIR: $SERVER_DIR"
+			_createServer $SERVER_DIR
+		else
+			$LOG _error "Falha ao recuperar a versao."
+			exit 1
+		fi
+	else 
+		$LOG _info "Diretorio do pacote ja existe."
+		CMD="echo '$URL_PACKAGE' | awk -F'ETICS/' '{printf \$2}'"		
+		$LOG _debug "    |_CMD: $CMD"
+		VERSAO=$(eval "$CMD") && echo ""
+		$LOG _debug "    |_VERSAO: $VERSAO"	
+		if [ "$VERSAO" != "" ]; then
+			# Verifica em qual linha pertence para atualizar o JAVA_HOME
+			_updateJavaHomeByMainVersion $VERSAO
+			# Atribuindo variaveis de ambiente
+			export ETICS_USER_DIR=$URL_PACKAGE/account
+			$LOG _debug "    |_ETICS_USER_DIR: $ETICS_USER_DIR"	
+			export ETICS_HOME=$URL_PACKAGE/account
+			export SERVER_HOME=$URL_PACKAGE/server
+		else 
+			$LOG _error "Falha ao recuperar a versao."
+			exit 1
+		fi
+		
+		CMD="echo '$URL_PACKAGE' | awk -F'/' '{printf \$8}' "		
+		$LOG _debug "    |_CMD: $CMD"
+		CLIENTE=$(eval "$CMD") && echo ""
+		$LOG _debug "    |_CLIENTE: $CLIENTE"	
+		if [ "$CLIENTE" = "" ]; then
+			$LOG _error "Falha ao recuperar o cliente."
+			exit 1
+		fi
+	fi 
+}
+
+_updateJavaHomeByMainVersion() {
+	$LOG _debug "    |_updateJavaHomeByMainVersion()"
+	P1=$1	
+	CMD="echo '$P1' | awk -F'.' '{printf \$1}'"		
+	$LOG _debug "      |_CMD: $CMD"
+	LINE_VERSION=$(eval "$CMD") && echo ""
+	$LOG _debug "      |_LINE_VERSION: $LINE_VERSION"
+	if [ "$LINE_VERSION" = "9" ] ; then 
+		# Linha 9
+		export JAVA_HOME=$JAVA_HOME_L9
+	else
+		# Linha 8
+		export JAVA_HOME=$JAVA_HOME_L8
+	fi
+	if [ $?PATH_ORI ]; then
+		export PATH_ORI=${PATH}
+	fi
+	export PATH=${JAVA_HOME}/bin:${PATH_ORI}  
+	$LOG _debug "      |_JAVA_HOME: $JAVA_HOME"
+}
+
+_updateAlias() {
+	$LOG _debug "        |_updateAlias()"	
+	P1=$1
+	
+	if [ "$DIR_PACKAGE" == "" ]; then
+		CMD="echo \"$P1\" | awk -F'/' '{print \$7}' | awk -F'.' '{printf \"%s%s%s%s%s\", \$1, \$2, \$3, \$4, \$5}' | awk -F'-' '{printf \"%s%s\", \$1, \$2}'"
+		$LOG _debug "          |_CMD: $CMD"
+		VERSAO_ALIAS_NAME=$(eval "$CMD") && echo ""
+		$LOG _debug "VERSAO_ALIAS_NAME: $VERSAO_ALIAS_NAME"	
+		CMD="echo \"$P1\" | awk -F'/' '{print \$8}'"
+		$LOG _debug "          |_CMD: $CMD"
+		CLIENTE_ALIAS_NAME=$(eval "$CMD") && echo ""
+		$LOG _debug "          |_CLIENTE_ALIAS_NAME: $CLIENTE_ALIAS_NAME"	
+		ALIAS_NAME="sde"$VERSAO_ALIAS_NAME$CLIENTE_ALIAS_NAME
+		$LOG _debug "          |_ALIAS_NAME: $ALIAS_NAME"
+	else
+		CMD="date +%d%m%y%H%M%S"
+		AGORA=$(eval "$CMD") && echo
+		$LOG _debug "          |_AGORA: $AGORA"
+		ALIAS_NAME="sde"$AGORA
+		$LOG _debug "          |_ALIAS_NAME: $ALIAS_NAME"
+	fi
+	if [ -f ~/$ARQ_ALIAS_SDE ]; then
+		CMD="grep $ALIAS_NAME ~/$ARQ_ALIAS_SDE"
+		$LOG _debug "          |_CMD: $CMD"
+		CHECK_ALIAS_NAME=$(eval "$CMD") && echo ""
+		$LOG _debug "          |_CHECK_ALIAS_NAME: $CHECK_ALIAS_NAME"
+		if [ "$CHECK_ALIAS_NAME" == "" ]; then
+			CMD="echo \"\";echo \"alias $ALIAS_NAME=\\\"$0 -u $P1 -c $CLIENTE >> ~/$ARQ_ALIAS_SDE\\\"\""
+			$LOG _debug "          |_CMD: $CMD"
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			echo 
+		fi
+	fi	
+}
+
+## Avaliar necessidade.
+_gravaArqTmp() {
+	TXT=$1
+	ARQ_TMP=$2
+	if [ ! -f $ARQ_TMP ]; then 		
+		CMD="touch $ARQ_TMP"
+		[[ "$SIMULATE" = "n" ]] && eval $CMD
+	fi 
+	CMD="echo \"$TXT\" >> $ARQ_TMP"
+	[[ "$SIMULATE" = "n" ]] && eval $CMD
+}
+
+_changeAutoConfiguration() {
+	$LOG _debug "  |_changeAutoConfiguration()"
+	if [ "$HOST_PORT_ACCOUNT" != "-" ]; then
+		# TODO: PARAM_LIST_WILDFLY[$account_server_host]="$ACCOUNT_HOST"
+		PARAM_LIST_ACCOUNT[$account_server_port]="$ACCOUNT_PORT"
+	fi
+	
+	if [ "$HOST_PORT_WILDFLY" != "-" ]; then
+		PARAM_LIST_ACCOUNT[$appserver_connections]="$WILDFLY_HOST:$WILDFLY_PORT"	
+	fi
+}	
+
+_runConfiguratorAuto() {
+	$LOG _debug "        |_runConfiguratorAuto()"
+	CONFIGURATOR_DIR=$1
+	# Roda a primeira vez para gerar o arquivo properties vazio.
+	CMD="$CONFIGURATOR_DIR/bin/setup.sh text-auto >/dev/null 2>&1"
+	$LOG _debug "          |_CMD = $CMD"
+	[[ "$SIMULATE" = "n" ]] && eval $CMD
+	# Substitui os parametros 
+	for key in ${!PARAM_LIST_ACCOUNT[@]}; do
+		$LOG _debug "          |_$key = ${PARAM_LIST_ACCOUNT[${key}]}"
+		CMD="sed -i \"s|${key} = |${key} = ${PARAM_LIST_ACCOUNT[${key}]}|\" $CONFIGURATOR_DIR/bin/$ARQ_CONF_DEFAULT"		
+		[[ "$SIMULATE" = "n" ]] && eval $CMD
+	done
+	# Roda novamente com os valores substituidos
+	CMD="$CONFIGURATOR_DIR/bin/setup.sh text-auto >/dev/null 2>&1"
+	$LOG _debug "          |_CMD = $CMD"
+	MSG="Rodando configurador (setup.sh) ..."
+	$LOG _info "$MSG" -b
+	[[ "$SIMULATE" = "n" ]] && eval $CMD
+	$LOG _info "$MSG" -ok	
+}
+
+## Avaliar necessidade.
+_removeAmbLine() {
+	SDE_AMB=$1
+	$LOG _debug "Removendo $SDE_AMB do arquivo de alias."
+	CMD="sed -i '/$SDE_AMB/d' $ARQ_ALIAS_SDE"
+	$LOG _debug "CMD: $CMD"
+	[[ "$SIMULATE" = "n" ]] && eval $CMD
+}
+
+## Avaliar necessidade.
+_updateAmb() {
+	CMD="cat ~/$ARQ_ALIAS_SDE | awk '{print \$2}' | awk -F '=' '{print \$1}'"
+	$LOG _debug "CMD: $CMD"
+	AMBS=$(eval "$CMD") && echo ""
+	for AMB in $AMBS; do 
+		CMD="cat ~/$ARQ_ALIAS_SDE | grep $AMB | awk -F '=' '{print \$2}' | awk '{print \$2}' | awk -F '\"' '{print \$1}'"
+		$LOG _debug "CMD: $CMD"
+		DIR_AMB=$(eval "$CMD") && echo ""
+		if [ ! -d $DIR_AMB ]; then
+			_removeAmbLine $AMB
+		fi
+	done
+}
+
+_setCurSrcDir() {
+	$LOG _debug "  |_setCurSrcDir()"
+	if [ "$CLIENTE" = "bra_vivo" ]; then
+		FONTES_DIR=$FONTES_VIVO_DIR
+	fi
+	if [ "$CLIENTE" = "bra_tim" ]; then
+		FONTES_DIR=$FONTES_TIM_DIR
+	fi
+	if [ "$CLIENTE" = "bra_copel" ]; then
+		FONTES_DIR=$FONTES_COPEL_DIR
+		PARAM_LIST_ACCOUNT=$PARAM_LIST_ACCOUNT_COPEL
+		PARAM_VALUE_LIST_ACCOUNT="${SERVER_PORT} ${JAVA_HOME} ${ORACLE_HOME} /opt/mqm wildfly-eap ${APPSERVER_CONNECTIONS} appclient appclient1@cpqd"
+	fi
+	if [ "$CLIENTE" = "bra_sercomtel" ]; then
+		FONTES_DIR=$FONTES_SERCOMTEL_DIR
+	fi
+	if [ "$CLIENTE" = "bra_claro" ]; then
+		FONTES_DIR=$FONTES_CLARO_DIR
+	fi
+	if [ "$CLIENTE" = "bra_telebras" ]; then
+		FONTES_DIR=$FONTES_TELEBRAS_DIR
+	fi
+	if [ "$CLIENTE" = "bra_cpfl" ]; then
+		FONTES_DIR=$FONTES_CPFL_DIR
+	fi
+	if [ "$CLIENTE" = "arg_arsat" ]; then
+		FONTES_DIR=$FONTES_ARSAT_DIR
+	fi
+	if [ "$CLIENTE" = "ury_antel" ]; then
+		FONTES_DIR=$FONTES_ANTEL_DIR
+	fi
+	if [ "$CLIENTE" = "usa_msc" ]; then
+		FONTES_DIR=$FONTES_MSC_DIR
+	fi
+	if [ "$CLIENTE" = "col_tlf" ]; then
+		FONTES_DIR=$FONTES_COLOMBIA_DIR
+	fi
+    if [ "$CLIENTE" = "chi_tlf" ] ; then
+		FONTES_DIR=$FONTES_CHILE_DIR
+	fi
+	if [ "$CLIENTE" = "per_tlf" ] ; then
+		FONTES_DIR=$FONTES_PERU_DIR
+	fi
+}
+
+_createAccount() {
+	$LOG _debug "    |_createAccount()"
+	ACCOUNT_DIR=$1
+	[[ "$SIMULATE" = "n" ]] && mkdir -p $ACCOUNT_DIR
+	[[ "$SIMULATE" = "n" ]] && cd $ACCOUNT_DIR
+	# Baixa o index.html do diretorio account	
+	URL_ACCOUNT=$MAIN_URL/account
+	$LOG _debug "      |_URL_ACCOUNT: $URL_ACCOUNT"
+	if [ -f index.html ]; then
+		rm -f index.html
+	fi
+	CMD="wget -q $URL_ACCOUNT/"
+	$LOG _debug "      |_CMD: $CMD"
+	eval $CMD	
+	if [ -f index.html ]; then
+		CMD="grep href index.html | grep .zip | awk -F '\"' '{printf \$4}'"		
+		$LOG _debug "      |_CMD: $CMD"				
+		ARQ_ACCOUNT=$(eval "$CMD") && echo ""
+		$LOG _debug "      |_ARQ_ACCOUNT: $ARQ_ACCOUNT"
+		if [ "$ARQ_ACCOUNT" != "" ]; then 
+			# Baixar o arquivo da account
+			CMD="wget -q $URL_ACCOUNT/$ARQ_ACCOUNT"
+			$LOG _debug "      |_CMD: $CMD"
+			MSG="Baixando arquivo $ARQ_ACCOUNT ..."
+			$LOG _info "$MSG" -b 
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+			
+			# Descompactar o arquivo
+			CMD="unzip -q -o $ARQ_ACCOUNT"
+			$LOG _debug "      |_CMD: $CMD"
+			MSG="Descompactando $ARQ_ACCOUNT ..."
+			$LOG _info "$MSG" -b
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+			# Apaga o index.html
+			rm -f index.html
+			
+			# Baixa informacoes do arquivo de customer de acordo com o cliente.
+			_getCustomer "account"
+			
+			CMD="chmod -R 777 *"
+			$LOG _debug "      |_CMD: $CMD"
+			MSG="Atribuindo permissao ..."
+			$LOG _info "$MSG" -b
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+
+			# Atribuindo variaveis de ambiente
+			export ETICS_USER_DIR=$ACCOUNT_DIR
+			export ETICS_HOME=$ACCOUNT_DIR
+				
+			cd bin
+			CMD="./config_all.sh >/dev/null 2>&1"
+			$LOG _debug "      |_CMD: $CMD"
+			MSG="Rodando config_all.sh ..."
+			$LOG _info "$MSG" -b
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+				
+			CMD="echo 's' | ./config_user.sh >/dev/null 2>&1"
+			$LOG _debug "      |_CMD: $CMD"
+			MSG="Rodando config_user.sh ..."
+			$LOG _info "$MSG" -b
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+				
+			_runConfiguratorAuto "$ETICS_HOME/configurator"
+				
+			cd
+			_updateAlias "$ACCOUNT_DIR"		
+				
+		else
+			$LOG _error "Nao foi possivel baixar o arquivo de account."
+			rm -f index.html
+			exit 1
+		fi
+	else 
+		$LOG _error "$URL_ACCOUNT nao foi encontrada."
+		exit 1
+	fi
+}
+
+_createServer() {
+	$LOG _debug "        |_createServer()"
+	SERVER_DIR=$1
+	[[ "$SIMULATE" = "n" ]] && mkdir -p $SERVER_DIR
+	[[ "$SIMULATE" = "n" ]] && cd $SERVER_DIR
+	# Baixa o index.html do diretorio account	
+	URL_SERVER=$MAIN_URL/$LANG_DIR
+	$LOG _debug "          |_URL_SERVER: $URL_SERVER"
+	if [ -f index.html ]; then
+		rm -f index.html
+	fi
+	CMD="wget -q $URL_SERVER/"
+	$LOG _debug "          |_CMD: $CMD"
+	eval $CMD
+	if [ -f index.html ]; then
+		CMD="cat index.html | grep href | grep server | grep .zip | awk -F'\"' '{printf \$4}'"
+		$LOG _debug "          |_CMD: $CMD"
+		ARQ_SERVER=$(eval "$CMD") && echo ""
+		$LOG _debug "ARQ_SERVER: $ARQ_SERVER"
+		if [ "$ARQ_SERVER" != "" ]; then 
+			# Baixar o arquivo da account
+			CMD="wget -q $URL_SERVER/$ARQ_SERVER"
+			$LOG _debug "          |_CMD: $CMD"
+			MSG="Baixando arquivo $ARQ_SERVER ..."
+			$LOG _info "$MSG" -b
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+			# Descompactar o arquivo
+			CMD="unzip -q -o $ARQ_SERVER"
+			$LOG _debug "          |_CMD: $CMD"
+			MSG="Descompactando $ARQ_SERVER ..."
+			$LOG _info "$MSG" -b
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+			
+			# Renomeia o diretorio descompactado para package-server
+			CMD="echo \"$ARQ_SERVER\" | rev | cut -c9- | rev"
+			$LOG _debug "          |_CMD: $CMD"
+			DIR_SERVER_UNPACKED=$(eval "$CMD") && echo ""
+			CMD="mv $DIR_SERVER_UNPACKED package-server"
+			$LOG _debug "          |_CMD: $CMD"
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			
+			# Apaga o index.html
+			rm -f index.html
+				
+			# Baixa informacoes do arquivo de customer de acordo com o cliente.
+			_getCustomer "server"
+			
+			export SERVER_HOME=$PWD
+		else
+			$LOG _error "Nao foi possivel baixar o arquivo de account."
+			rm -f index.html
+			exit 1
+		fi
+	else 
+		$LOG _error "$URL_SERVER nao foi encontrada."
+		exit 1
+	fi
+}
+
+_getCustomer() {
+	$LOG _debug "        |_getCustomer()"	
+	CUSTOMER=$1
+	URL_CUSTOMER=$MAIN_URL/customer
+	$LOG _debug "          |_URL_CUSTOMER = $URL_CUSTOMER"
+	CMD="wget -q $URL_CUSTOMER/"
+	$LOG _debug "          |_CMD: $CMD"
+	eval $CMD		
+	CMD="cat index.html | grep href | grep .zip | grep $CUSTOMER | grep $CLIENTE | awk -F'\"' '{printf \$4}'"
+	$LOG _debug "          |_CMD: $CMD"
+	if [ -f index.html ]; then
+		ARQ_CUSTOMER=$(eval "$CMD") && echo ""
+		if [ "$ARQ_CUSTOMER" != "" ]; then 
+				# Baixa o arquivo de customer
+				if [ -f $ARQ_CUSTOMER ]; then
+					# Arquivo ja existe
+					$LOG _warn "Arquivo $ARQ_CUSTOMER ja existe."
+					$LOG _info "Baixar novamente? (s/n) [s]" -n
+					read RESP
+					if [ "$RESP" != "N" ] || [ "$RESP" != "n" ]; then
+						# Apaga o arquivo
+						[[ "$SIMULATE" = "n" ]] && rm -f $ARQ_CUSTOMER	
+						CMD="wget -q $URL_CUSTOMER/$ARQ_CUSTOMER"
+						$LOG _debug "          |_CMD: $CMD"
+						MSG="Baixando arquivo $ARQ_CUSTOMER ..."
+						$LOG _info "$MSG" -b
+						[[ "$SIMULATE" = "n" ]] && eval $CMD
+						$LOG _info "$MSG" -ok
+					fi
+				else 
+					CMD="wget -q $URL_CUSTOMER/$ARQ_CUSTOMER"
+					$LOG _debug "          |_CMD: $CMD"
+					MSG="Baixando arquivo $ARQ_CUSTOMER ..."
+					$LOG _info "$MSG" -b
+					[[ "$SIMULATE" = "n" ]] && eval $CMD
+					$LOG _info "$MSG" -ok
+				fi
+				# Apaga o index.html
+				rm -f index.html
+				
+				if [ "$CUSTOMER" = "server" ]; then					
+					CMD="unzip -q -o $ARQ_CUSTOMER -d package-server"
+				else 	
+					CMD="unzip -q -o $ARQ_CUSTOMER"
+				fi
+				$LOG _debug "          |_CMD: $CMD"
+				MSG="Descompactando $ARQ_CUSTOMER ..."
+				$LOG _info "$MSG" -b
+				[[ "$SIMULATE" = "n" ]] && eval $CMD
+				$LOG _info "$MSG" -ok
+		else 
+			$LOG _error "Nao foi possivel baixar o arquivo de customer."
+			rm -f index.html
+			exit 1
+		fi
+	else 
+		$LOG _error "$URL_CUSTOMER nao foi encontrada."
+	fi
+}
+
+###############################################################################
+# MAIN
+###############################################################################
+$LOG _info "Iniciando..."
+
+# Recupera os parametros
+_getParam $@
+
+# Altera parametros default para especificos informados da account.
+_changeAutoConfiguration
+
+# Seta qual lang esta o pacote de acordo com o cliente informado.
+_setLangDir
+
+# Monta pacote
+_createMainInstalattion
+
+# Recupera o diretorio de fontes corrente
+_setCurSrcDir
+
+[[ "$SIMULATE" = "n" ]] && cd $FONTES_DIR
+if [ -d $FONTES_DIR/oper/fontes/components/legacy/core ]; then 
+	# Variaveis de ambiente para diretorio de fontes
+	export CORE_DIR="$FONTES_DIR/oper/fontes/components/legacy/core"
+	export TARGET_DIR="${CORE_DIR}/target"
+	export GP_HOME="${TARGET_DIR}/develop/TEMP"
+	export OPER_HOME="${TARGET_DIR}"
+fi
+
+# Exporta a NEW_PATH que sera adicionado ao final do PATH no .sagre_login (chamado por .bashrc)
+export NEW_PATH=${ETICS_HOME}/bin
+
+[[ "$SIMULATE" = "n" ]] && cd $ETICS_USER_DIR
+
+$LOG _info "## Ambiente:"
+$LOG _info "## JAVA_HOME         :: ${JAVA_HOME}"
+$LOG _info "## ORACLE_HOME       :: ${ORACLE_HOME}"
+$LOG _info "##"
+$LOG _info "## Diretorios da account:"
+$LOG _info "## ETICS_HOME        :: ${ETICS_HOME}"
+$LOG _info "## SERVER_HOME       :: ${SERVER_HOME}"
+$LOG _info "## ETICS_USER_DIR    :: ${ETICS_USER_DIR}"
+$LOG _info "##"
+$LOG _info "## Diretorios de compilacao:"
+$LOG _info "## TARGET_DIR        :: ${TARGET_DIR}"
+$LOG _info "## GP_HOME           :: ${GP_HOME}"
+$LOG _info "## OPER_HOME         :: ${OPER_HOME}"
+$LOG _info "##"
+$LOG _info "############################################################################"
+$LOG _info "Finalizado com SUCESSO!"
+
+# FIM
+ZSH=${ZSH="n"}
+$LOG _debug "ZSH: $ZSH"
+if [ "$ZSH" == "n" ]; then	
+	CMD=bash
+else 
+	CMD=zsh
+fi
+
+$LOG _debug "CMD: $CMD"
+[[ "$SIMULATE" = "n" ]] && exec $CMD
+
+exit 0

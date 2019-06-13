@@ -1,0 +1,218 @@
+#!/bin/bash
+
+###############################################################################
+#
+# meta_mklink.bsh :: Meta MkLink
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Equivalente do script mklink_META.bat, porem com umas coisinhas a mais...
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao inicial;
+#       - Monta o diretorio com a versao do cdk concatenado com o do etics (caso nao exista);
+#       - Baixa o configurador do pnexus;
+#       - Inicializa o configurador automaticamente;
+#       - Cria os subdiretorios dos modulos;
+#       - Faz o link de cada diretorio de xml.
+# 
+#
+###############################################################################
+
+# Nivel de log (info, debug, error, warning) - default: info
+LEVEL=${LEVEL="info"}
+
+# Dependencia de scripts externos
+LOG="logger_v4.bsh"
+BUSY="busy_v2.bsh"
+
+# Variaveis globais
+VERSAO_DIR=""
+CDK_VERSION=""
+ETICS_VERSION=""
+ETICS_REPO_DIR=""
+META_INSTALLER_FILE=""
+
+# Constantes globais
+MAIN_DIR="~/work/meta"
+CONFIG_DIR="wizard/config"
+SUPER_PARENT_DIR="main/super-parent"
+META_INSTALLER_FILE_NAME="cpqd-cdk-meta-installer"
+PNEXUS_MAIN_URL="https://pnexus.cpqd.com.br/service/local/repo_groups/cpqd-proxy-group/content/br/com/cpqd/cdk/cpqd-cdk-meta-installer"
+MODULES_CONFIG_FILE="mw-modules-config.xml"
+VALIDATION_CONFIG_FILE="mw-balidation-config.xml"
+
+
+# Funcoes
+_intro() {
+	clear screen
+	MSG="\n 
+	*
+	*                        *** Meta MkLink Advanced ***
+	*
+	*      Seta o ambiente do metawizard de acordo com a versão desejada.
+	*
+	***********************************************************************************\n\n"
+	$LOG _info "$MSG"
+}
+
+_uso () {
+  MSG="	*
+	* Uso: meta_mklink <ETICS_REPO_DIR>/--help,-help,-h
+	*
+	*  <ETICS_REPO_DIR>  :: Diretorio do repositorio principal do etics.
+	*  ou 
+	*  --help, -help, -h :: Imprime o uso e sai.
+	*
+	***********************************************************************************\n\n"
+	$LOG _warn "$MSG"
+  exit 0
+}
+
+_getParam() {
+	$LOG _debug "_getParam()"
+	if [ $# -eq 0 ]; then
+		_intro
+		_uso
+		exit 1
+	fi
+
+	if [ $# -gt 1 ] ; then	
+	  $LOG _error "Numero de parametros invalidos!"
+	  _uso
+	  exit 1
+	fi
+	
+	ETICS_REPO_DIR=$1
+}
+
+_checkRepoDir() {
+	$LOG _debug "_checkRepoDir()"
+	if [ ! -d $ETICS_REPO_DIR ]; then
+		$LOG _error "Diretorio de repositorio invalido!"
+		exit 1
+	fi
+}
+
+_getVersionFromDir() {
+	$LOG _debug "_getVersionFromDir()"
+	CMD="cat \$ETICS_REPO_DIR/\$SUPER_PARENT_DIR/pom.xml | grep \"<cpqd.etics.version>\" | awk -F '>' '{print \$2}' | awk -F '<' '{print \$1}'"
+	$LOG _debug "CMD: $CMD"
+	ETICS_VERSION=`eval "$CMD"`
+	$LOG _debug "ETICS_VERSION: $ETICS_VERSION"
+	
+	CMD="cat \$ETICS_REPO_DIR/\$SUPER_PARENT_DIR/pom.xml | grep \"<cpqd.cdk.version>\" | awk -F '>' '{print \$2}' | awk -F '<' '{print \$1}'"
+	$LOG _debug "CMD: $CMD"
+	CDK_VERSION=`eval "$CMD"`
+	$LOG _debug "CDK_VERSION: $CDK_VERSION"
+	
+	VERSAO_DIR="$MAIN_DIR/$CDK_VERSION_$ETICS_VERSION"
+	$LOG _debug "VERSAO_DIR: $VERSAO_DIR"
+}
+
+_makeDirVersion() {
+	$LOG _debug "_makeDirVersion()"
+	# Cria o diretorio, se nao existir
+	if [ ! -d $VERSAO_DIR ]; then 
+		$LOG _info "Criando diretorio $VERSAO_DIR."
+		mkdir $VERSAO_DIR
+	else 
+		# Pergunta se quer refazer a instalacao.
+		$LOG _warn "Instalacao do Metawizard para esta versao ja existe."
+		$LOG _info "Deseja refazer a instalacao? (S/s - Sim; N/n/Enter - Não" -n
+		read RESP
+		if [ "$RESP" = "S" ] || [ "$RESP" = "s" ]  ; then
+			# Apaga o diretorio e monta novamente
+			CMD="rm -fr $VERSAO_DIR"
+			MSG="Apagando o diretorio $VERSAO_DIR... "
+			$LOG _info "$MSG" -b
+			# TODO: eval $CMD
+			$LOG _info "$MSG" -ok
+			$LOG _info "Criando diretorio $VERSAO_DIR."
+			mkdir $VERSAO_DIR
+		else 
+			if [ "$RESP" != "N" ] && [ "$RESP" = "n" ] && [ "$RESP" = "" ] ; then
+				$LOG _warn "Opcao invalida! Presupondo que nao deseja."
+				$LOG _info "Finalizado."
+				exit 0
+			fi
+		fi
+	fi
+}
+
+_getInstaller() {
+	$LOG _debug "_getInstaller()"
+	META_INSTALLER_FILE="$META_INSTALLER_FILE_NAME-$CDK_VERSION.jar"
+	$LOG _debug "META_INSTALLER_FILE: $META_INSTALLER_FILE"
+	CMD="wget -q $PNEXUS_MAIN_URL/$CDK_VERSION/$META_INSTALLER_FILE --directory-prefix=$VERSAO_DIR"
+	$LOG _debug "CMD: $CMD"
+	MSG="Baixando arquivo $META_INSTALLER_FILE ..."
+	$LOG _info "$MSG" -bf "$VERSAO_DIR/$META_INSTALLER_FILE"
+	eval $CMD
+	$LOG _info "$MSG" -ok
+}
+
+_runInstaller() {
+	$LOG _debug "_runInstaller()"
+	CMD="chmod +x $VERSAO_DIR/$META_INSTALLER_FILE"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+	CMD="$VERSAO_DIR/$META_INSTALLER_FILE"
+	$LOG _debug "CMD: $CMD"
+	MSG="Iniciando $META_INSTALLER_FILE... "
+	$LOG _info "$MSG" -b
+	eval $CMD
+	$LOG _info "$MSG" -ok	
+}
+
+_copyDefaultConfigFiles() {
+	$LOG _debug "_copyDefaultConfigFiles()"
+	FULL_CONFIG_DIR="$VERSAO_DIR/$CONFIG_DIR"
+	$LOG _debug "FULL_CONFIG_DIR: $FULL_CONFIG_DIR"
+	# Cria backup dos arquivos antigos.
+	CMD="mv $FULL_CONFIG_DIR/$MODULES_CONFIG_FILE $FULL_CONFIG_DIR/$MODULES_CONFIG_FILE_old"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+	CMD="mv $FULL_CONFIG_DIR/$VALIDATION_CONFIG_FILE $FULL_CONFIG_DIR/$VALIDATION_CONFIG_FILE_old"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+	# copia os arquivos default.
+	CMD="cp $MAIN_DIR/$MODULES_CONFIG_FILE $FULL_CONFIG_DIR/."
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+	CMD="mv $MAIN_DIR/$VALIDATION_CONFIG_FILE $FULL_CONFIG_DIR/."
+	$LOG _debug "CMD: $CMD"
+	eval $CMD	
+}
+
+###############################################################################
+# MAIN
+###############################################################################
+$LOG _info "Iniciando..."
+
+_getParam $@
+
+if [ "$ETICS_REPO_DIR" = "--help" ] || [ "$ETICS_REPO_DIR" = "-help" ] || [ "$ETICS_REPO_DIR" = "-h" ] ; then
+	_intro
+	_uso
+	exit 0
+fi
+
+_checkRepoDir() 
+
+_getVersionFromDir()
+
+_makeDirVersion()
+
+_getInstaller()
+
+_runInstaller()
+
+_copyDefaultConfigFiles() 
+
+# FIM
+$LOG _info "Finalizado com sucesso."
+exit 0

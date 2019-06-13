@@ -1,0 +1,657 @@
+#!/bin/bash
+
+###############################################################################
+#
+# set-dir-etics.bsh :: Set Directories Etics
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Seta o ambiente de uma account de acordo com um padrão de diretorios           
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao csh;
+#       - Recupera os arquivos da repodsso e monta a acount;
+# 
+# v2 :: Versao bash:
+#       - Modularizacao (criacao de funcoes internas);
+#       - Mensagens de debug, info, warning, error;
+#       - Recupera o repositorio de fontes legacy;
+#       - Executa os comandos config_all.sh e config_user.sh;
+#       - Executa o configurador com dados pre-definidos, nao configuraveis;
+#       - Cria e atualiza o arquivo .sde_alias para facilitar a reutilizacao do ambiente;
+#       - Cria os alias cpbin e cplib para copiar os binarios gerados para a account;
+# 
+# v3 :: Melhoria:
+#       - Parametro de remocao;
+# 
+# v4 :: Melhoria:
+#       - Troca do parametro de remocao pelo de atualizacao do arquivo de ambientes.
+#
+# v5 :: Alteracoes:
+#       - Adaptacao a mudanca de diretorios dos branches separados.
+#
+###############################################################################
+#   BUGS
+###############################################################################
+#
+# 1 - Remocao se perde e apaga tudo da conta raiz /home/usuario/* 
+#     Acao: Parametro removido.
+# 
+###############################################################################
+
+# Nivel de log (info, debug, error, warning) - default: info
+LEVEL=${LEVEL="info"}
+
+# Dependencia de scripts externos
+LOG="logger.bsh"
+BUSY="busy.bsh"
+
+# Comandos pre-definidos (facilitadores)
+CP="cp -f"
+RM="rm -fr"
+JAR="jar uf"
+ZLST="unzip -l"
+ZEXTR="unzip -q -o -x"
+ZIP="unzip -q"
+GIT_LIST_REMOTES_CMD="git branch -r"
+GIT_GET_CURRENT_CMD="git branch -vv"
+GIT_CHECKOUT_CMD="git checkout"
+GIT_UPDATE_CMD="git pull --rebase"
+
+# Variaveis globais
+ACCOUNT_DIR=""
+CLIENTE=""
+GIT_CHECKOUT_BRANCH=""
+
+# Constantes globais
+LIST_CLIENTES="bra_vivo chi_tlf col_tlf per_tlf bra_tim bra_copel bra_sercomtel bra_claro bra_cpfl bra_telebras arg_arsat ury_antel usa_msc "
+SVN_LEGACY_DIR="implementacao/oper/fontes/components/legacy"
+SVN_OPER_PARENT_DIR="implementacao/oper/fontes/components/parent"
+SVN_MAIN_DIR="implementacao/main"
+ARQ_ALIAS_TMP=".cp_alias"
+ARQ_CONF_DEFAULT="ant.install.properties"
+ARQ_ALIAS_SDE=".sde_alias"
+# Pode ser alterado por variavel de ambiente 
+SERVER_PORT=${SERVER_PORT="10550"}
+# Pode ser alterado por variavel de ambiente 
+DISPLAY=${DISPLAY="10.202.76.103:0.0"}
+FONTES_DIR="/home/usrgroove/Repositorios"
+FONTES_VIVO_DIR="${FONTES_DIR}/GP-VIVO"
+FONTES_TIM_DIR="${FONTES_DIR}/GP-TIM"
+FONTES_CLARO_DIR="${FONTES_DIR}/GP-CLARO"
+FONTES_COPEL_DIR="${FONTES_DIR}/GP-COPEL"
+FONTES_TELEBRAS_DIR="${FONTES_DIR}/GP-TELEBRAS"
+FONTES_SERCOMTEL_DIR="${FONTES_DIR}/GP-SERCOMTEL"
+FONTES_MSC_DIR="${FONTES_DIR}/GP-MSC"
+FONTES_ANTEL_DIR="${FONTES_DIR}/GP-ANTEL"
+FONTES_ARSAT_DIR="${FONTES_DIR}/GP-ARSAT"
+FONTES_CPFL_DIR="${FONTES_DIR}/GP-CPFL"
+FONTES_GLOBAL_DIR="${FONTES_DIR}/GP-GLOBAL"
+# Funcoes
+_intro() {
+	clear screen
+	printf "\n 
+	*
+	*                        *** Set Directories Etics ***
+	*
+	*      Seta o ambiente de uma account de acordo com um padrao de diretorios e 
+	*      configura automaticamente a account.
+	*
+	***********************************************************************************\n\n"
+}
+
+_uso () {
+  printf "	*
+	* Uso: sde <ACCOUNT_DIR>/<URL_ACCOUNT>/--help,-help,-h,-u/ [CLIENTE] 
+	*
+	*  <ACCOUNT_DIR>     :: Diretorio para setar as variaveis ETCIS_USER_DIR e ETICS_HOME
+	*  ou 
+	*  <URL_ACCOUNT>     :: Endereco do diretorio raiz da pacote.
+	*                       Exemplo: http://repodsso/gc/BUILDS/ETICS/8.14.0/8.14.0.0.0
+	*   ou
+	*  --help, -help, -h :: Imprime o uso e sai.
+	*   ou 
+	*  -u                :: Atualiza arquivo de ambientes
+	*
+	*  [CLIENTE]         :: Clientes:
+	*                      ($LIST_CLIENTES)
+	*
+	***********************************************************************************
+	*
+	*                               !!!IMPORTANTE!!!
+	*
+	*  O endereco IP do servidor wildfly e a porta linux devem ser configuradas de duas maneiras:
+	*  
+	*  1 - Incluir no arquivo de login da shell(.bashrc ou .etics_login) as entradas:
+	* 
+	*      export DISPLAY=<IP DA SUA MAQUINA WINDOWS>:0.0
+	*      export SERVER_PORT=<PORTA LINUX LIVRE>
+	* 
+	*  2 - Alterar o arquivo ~/bin/set-dir-etics.bsh:
+	*
+	*      SERVER_PORT=${SERVER_PORT=\"<PORTA LINUX LIVRE>\"}
+	*      DISPLAY=${DISPLAY=\"<IP DA SUA MAQUINA WINDOWS>:0.0\"}
+	*
+	*  OBS: A porta do servidor wildfly sempre sera 8080. 
+	*
+	***********************************************************************************\n\n"
+  exit 0
+}
+
+_getParam() {
+	if [ $# -eq 0 ]; then
+		_intro
+		_uso
+		exit 1
+	fi
+
+	if [ $# -gt 3 ] ; then	
+	  $LOG _error "Numero de parametros invalidos!"
+	  _uso
+	  exit 1
+	fi
+	
+	ACCOUNT_DIR=$1
+	CLIENTE=$2
+	#GIT_CHECKOUT_BRANCH=$3	
+}
+
+_validaCliente() {
+	P1=$1
+	# Cliente foi preenchido como parametro
+	if [ ! -z "${LIST_CLIENTES##*$CLIENTE*}" ]; then
+		# Cliente invalido.
+		$LOG _error "Cliente informado nao eh valido."
+		_uso;
+		exit 1
+	fi
+}
+
+_updateAlias() {	
+	P1=$1
+	CMD="echo \"$P1\" | awk -F'/' '{print \$6}' | awk -F'.' '{printf \"%s%s%s%s%s\", \$1, \$2, \$3, \$4, \$5}' | awk -F'-' '{printf \"%s%s\", \$1, \$2}'"
+	$LOG _debug "CMD: $CMD"
+	VERSAO_ALIAS_NAME=`eval "$CMD"`
+	$LOG _debug "VERSAO_ALIAS_NAME: $VERSAO_ALIAS_NAME"	
+	CMD="echo \"$P1\" | awk -F'/' '{print \$7}'"
+	$LOG _debug "CMD: $CMD"
+	CLIENTE_ALIAS_NAME=`eval "$CMD"`
+	$LOG _debug "CLIENTE_ALIAS_NAME: $CLIENTE_ALIAS_NAME"	
+	ALIAS_NAME="sde"$VERSAO_ALIAS_NAME$CLIENTE_ALIAS_NAME
+	$LOG _debug "ALIAS_NAME: $ALIAS_NAME"
+	if [ -f ~/$ARQ_ALIAS_SDE ]; then
+		CMD="grep $ALIAS_NAME ~/$ARQ_ALIAS_SDE"
+		$LOG _debug "CMD: $CMD"
+		CHECK_ALIAS_NAME=`eval "$CMD"`
+		$LOG _debug "CHECK_ALIAS_NAME: $CHECK_ALIAS_NAME"
+		if [ "$CHECK_ALIAS_NAME" == "" ]; then
+			CMD="echo \"\";echo \"a $ALIAS_NAME=\\\"sde $P1\\\"\" >> ~/$ARQ_ALIAS_SDE"
+			$LOG _debug "CMD: $CMD"
+			eval $CMD
+		fi
+	fi
+	
+}
+
+_gravaArqTmp() {
+	TXT=$1
+	ARQ_TMP=$2
+	if [ ! -f $ARQ_TMP ]; then 		
+		CMD="touch $ARQ_TMP"
+		eval $CMD
+	fi 
+	CMD="echo \"$TXT\" >> $ARQ_TMP"
+	eval $CMD
+}
+
+_rodaConfigurador() {
+	CONFIGURATOR_DIR=$1
+	$LOG _debug "Criando arquivo de valores default."
+	
+	cd $CONFIGURATOR_DIR
+	if [ -f $ARQ_CONF_DEFAULT ]; then
+		rm -f $ARQ_CONF_DEFAULT
+		rm -f bin/$ARQ_CONF_DEFAULT
+	fi
+	
+	touch $ARQ_CONF_DEFAULT
+	
+	CMD="echo $DISPLAY | sed 's|:0\.0|\\\:8080|'"
+	$LOG _debug "CMD: $CMD"
+	APPSERVER_CONNECTIONS=`eval "$CMD"`
+	
+	echo "	
+### Ant Installer - properties auto generated on Mon\ May\ 09\ 11\:25\:08\ BRT\ 2016
+
+basedir = .
+ant.install.config.version = 0.0
+
+
+## Properties from Page:splash
+
+## Properties from Page:license
+
+## Properties from Page:page.account.configuration
+# .ValidatedTextInput
+account.server.port = ${SERVER_PORT}
+# .ValidatedTextInput
+java.home.path = ${JAVA_HOME}
+# .ValidatedTextInput
+oracle.home.path = ${ORACLE_HOME}
+# .ValidatedTextInput
+mq.client.home.path = /opt/mqm
+
+## Properties from Page:page.appserver.configuration
+# .LargeSelectInput
+appserver.name = wildfly-eap
+# .ValidatedTextInput
+appserver.connections = ${APPSERVER_CONNECTIONS}
+# .ValidatedTextInput
+appserver.user.client.username = appclient
+# .ValidatedTextInput
+appserver.user.client.password = appclient1@cpqd
+
+## Properties from Page:progress
+# Targets selected for page
+progress-targets = init,configure,finish," > $ARQ_CONF_DEFAULT
+	
+	cp -f $ARQ_CONF_DEFAULT $CONFIGURATOR_DIR/bin/.
+	
+	cd $CONFIGURATOR_DIR/bin
+	CMD="./setup.sh text-auto >/dev/null 2>&1"
+	MSG="Rodando configurador (setup.sh) ..."
+	$LOG _info "$MSG" -b
+	eval $CMD
+	$LOG _info "$MSG" -ok
+	cd $ETICS_HOME
+}
+
+_removeAmbLine() {
+	SDE_AMB=$1
+	$LOG _debug "Removendo $SDE_AMB do arquivo de alias."
+	CMD="sed -i '/$SDE_AMB/d' $ARQ_ALIAS_SDE"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+}
+
+_updateAmb() {
+	CMD="cat ~/$ARQ_ALIAS_SDE | awk '{print \$2}' | awk -F '=' '{print \$1}'"
+	$LOG _debug "CMD: $CMD"
+	AMBS=`eval "$CMD"`
+	for AMB in $AMBS; do 
+		CMD="cat ~/$ARQ_ALIAS_SDE | grep $AMB | awk -F '=' '{print \$2}' | awk '{print \$2}' | awk -F '\"' '{print \$1}'"
+		$LOG _debug "CMD: $CMD"
+		DIR_AMB=`eval "$CMD"`
+		if [ ! -d $DIR_AMB ]; then
+			_removeAmbLine $AMB
+		fi
+	done
+}
+
+
+_execCheckout() {
+	# Monta fontes
+	$LOG _debug "FONTES_DIR: $FONTES_DIR"
+	$LOG _debug "GIT_CHECKOUT_BRANCH: $GIT_CHECKOUT_BRANCH"
+	if [ "$GIT_CHECKOUT_BRANCH" == "" ]; then
+		if [ ! -d $FONTES_DIR ]; then
+			$LOG _warn "Checkout nao efetuado. Efetuar o clone do repositorio antes de efetuar o checkout."
+        else
+			cd $FONTES_DIR
+			# Faz o update
+			CMD="$GIT_UPDATE_CMD >/dev/null 2>&1"
+			MSG="Efetuando update no repositorio..."
+			$LOG _info "$MSG" -b
+			eval $CMD
+			$LOG _info "$MSG" -ok
+			# Recupera o branch corrente
+			CMD="$GIT_GET_CURRENT_CMD | grep \\* | awk '{print \$2}'"
+			GIT_CURRENT=`eval "$CMD"`
+			$LOG _info "Branch corrente: $GIT_CURRENT"						
+		fi
+	else
+		# URL dos fontes foi informado, montar diretorio de fontes (caso nao exista)
+		if [ ! -d $FONTES_DIR ]; then
+			$LOG _warn "Checkout nao efetuado. Efetuar o clone do repositorio antes de efetuar o checkout."
+        else
+			# Vai ate o diretorio de fontes.
+			cd $FONTES_DIR
+		    # Verificar se o parametro de checkout existe
+			CMD="$GIT_LIST_REMOTES_CMD | grep $GIT_CHECKOUT_BRANCH | wc | awk '{print \$1}'"
+			GIT_BRANCH_NUM=`eval "$CMD"`
+			if [ "$GIT_BRANCH_NUM" != "1" ]; then
+				$LOG _warn "Checkout nao efetuado! Parametro de checkout retornou mais de um branch remoto valido."
+			else 
+			    MSG="Efetuando update..."
+				$LOG _info "$MSG" -b
+				eval $CMD
+				$LOG _info "$MSG" -ok
+				# Recupera o branch desejado
+				CMD="$GIT_LIST_REMOTES_CMD | grep $GIT_CHECKOUT_BRANCH"
+				GIT_BRANCH=`eval "$CMD"`
+				$LOG _debug "Branch recuperado: GIT_BRANCH=$GIT_BRANCH"
+				
+				# Recupera o branch corrente
+				CMD="$GIT_GET_CURRENT_CMD | grep \\* | awk '{print \$2}'"
+				GIT_CURRENT=`eval "$CMD"`
+				$LOG _info "Branch corrente: $GIT_CURRENT"
+				
+				if [ "$GIT_BRANCH" == "$GIT_CURRENT" ]; then
+					$LOG _warn "Repositorio ja se encontra no branch informado."
+				else 
+					# Efetuar o checkout
+					CMD="$GIT_CHECKOUT_CMD $GIT_BRANCH >/dev/null 2>&1"
+					MSG="Executando checkout para o branch $GIT_BRANCH..."
+					$LOG _info "$MSG" -b
+					eval $CMD
+					$LOG _info "$MSG" -ok
+				fi
+			fi
+		fi
+	fi
+}
+
+_setCurSrcDir() {
+	if [ "$CLIENTE" = "bra_vivo" ]; then
+		FONTES_DIR=$FONTES_VIVO_DIR
+	fi
+	if [ "$CLIENTE" = "bra_tim" ]; then
+		FONTES_DIR=$FONTES_TIM_DIR
+	fi
+	if [ "$CLIENTE" = "bra_copel" ]; then
+		FONTES_DIR=$FONTES_COPEL_DIR
+	fi
+	if [ "$CLIENTE" = "bra_sercomtel" ]; then
+		FONTES_DIR=$FONTES_SERCOMTEL_DIR
+	fi
+	if [ "$CLIENTE" = "bra_claro" ]; then
+		FONTES_DIR=$FONTES_CLARO_DIR
+	fi
+	if [ "$CLIENTE" = "bra_telebras" ]; then
+		FONTES_DIR=$FONTES_TELEBRAS_DIR
+	fi
+	if [ "$CLIENTE" = "bra_cpfl" ]; then
+		FONTES_DIR=$FONTES_CPFL_DIR
+	fi
+	if [ "$CLIENTE" = "arg_arsat" ]; then
+		FONTES_DIR=$FONTES_ARSAT_DIR
+	fi
+	if [ "$CLIENTE" = "ury_antel" ]; then
+		FONTES_DIR=$FONTES_ANTEL_DIR
+	fi
+	if [ "$CLIENTE" = "usa_msc" ]; then
+		FONTES_DIR=$FONTES_MSC_DIR
+	fi
+	if [ "$CLIENTE" = "chi_tlf" ] || [ "$CLIENTE" = "col_tlf" ] || [ "$CLIENTE" = "per_tlf" ] ; then
+		FONTES_DIR=$FONTES_GLOBAL_DIR
+	fi
+}
+
+
+###############################################################################
+# MAIN
+###############################################################################
+
+_getParam $@
+
+if [ "$ACCOUNT_DIR" = "--help" ] || [ "$ACCOUNT_DIR" = "-help" ] || [ "$ACCOUNT_DIR" = "-h" ] ; then
+	_intro
+	_uso
+	exit 0
+fi
+
+if [ "$ACCOUNT_DIR" = "-u" ] ; then
+    # Atualiza todos os ambientes'
+	_updateAmb
+	ambs
+	exit 0
+fi
+
+$LOG _info "Iniciando a aplicacao..."
+
+# Monta account
+if [ ! -d $ACCOUNT_DIR ]; then
+	$LOG _debug "ACCOUNT_DIR pode ser uma URL."
+	MAIN_URL=$ACCOUNT_DIR
+	
+	if [ "$CLIENTE" = "" ]; then
+		# Cliente nao foi informado como parametro
+		$LOG _info "Informe o cliente ($LIST_CLIENTES)? " -n
+		read CLIENTE	
+	fi
+	_validaCliente $CLIENTE	
+	$LOG _debug "CLIENTE: $CLIENTE"
+	
+	# Recuperando a versao e verificando se URL e valida.
+	
+	CMD="echo '$MAIN_URL' | awk -F'ETICS/' '{printf \$2}'"		
+	$LOG _debug "CMD: $CMD"
+	VERSAO=`eval "$CMD"`
+	$LOG _debug "VERSAO: $VERSAO"
+	if [ "$VERSAO" != "" ]; then
+		cd
+		ACCOUNT_DIR=$PWD/ETICS/$VERSAO/$CLIENTE/account
+		$LOG _debug "ACCOUNT_DIR: $ACCOUNT_DIR"
+		mkdir -p $ACCOUNT_DIR
+		cd $ACCOUNT_DIR
+		# Baixa o index.html do diretorio account	
+		URL_ACCOUNT=$MAIN_URL/account
+		$LOG _debug "URL_ACCOUNT: $URL_ACCOUNT"
+		if [ -f index.html ]; then
+			rm -f index.html
+		fi
+		$LOG _debug "Recuperando o arquivo index.html da account"
+		CMD="wget -q $URL_ACCOUNT/"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+		if [ -f index.html ]; then
+			CMD="cat index.html | grep href | grep .zip | awk -F'\"' '{printf \$4}'"
+			$LOG _debug "CMD: $CMD"
+			ARQ_ACCOUNT=`eval "$CMD"`
+			$LOG _debug "ARQ_ACCOUNT: $ARQ_ACCOUNT"
+			if [ "$ARQ_ACCOUNT" != "" ]; then 
+				# Baixar o arquivo da account
+				CMD="wget -q $URL_ACCOUNT/$ARQ_ACCOUNT"
+				$LOG _debug "CMD: $CMD"
+				MSG="Baixando arquivo $ARQ_ACCOUNT ..."
+				$LOG _info "$MSG" -b
+				eval $CMD
+				$LOG _info "$MSG" -ok
+				# Descompactar o arquivo
+				CMD="unzip -q -o $ARQ_ACCOUNT"
+				$LOG _debug "CMD: $CMD"
+				MSG="Descompactando $ARQ_ACCOUNT ..."
+				$LOG _info "$MSG" -b
+				eval $CMD
+				$LOG _info "$MSG" -ok
+				# Apaga o index.html
+				rm -f index.html
+				
+				# Baixa informacoes do arquivo de customer de acordo com o cliente.
+				URL_CUSTOMER=$MAIN_URL/customer
+				$LOG _debug "URL_CUSTOMER = $URL_CUSTOMER"
+				CMD="wget -q $URL_CUSTOMER/"
+				$LOG _debug "CMD: $CMD"
+				eval $CMD		
+				CMD="cat index.html | grep href | grep .zip | grep account | grep $CLIENTE | awk -F'\"' '{printf \$4}'"
+				$LOG _debug "CMD: $CMD"
+				if [ -f index.html ]; then
+					ARQ_CUSTOMER=`eval "$CMD"`
+					if [ "$ARQ_CUSTOMER" != "" ]; then 
+							# Baixa o arquivo de customer
+							if [ -f $ARQ_CUSTOMER ]; then
+								# Arquivo ja existe
+								$LOG _warn "Arquivo $ARQ_CUSTOMER ja existe."
+								$LOG _info "Baixar novamente? (s/n) [s]" -n
+								read RESP
+								if [ "$RESP" != "N" ] || [ "$RESP" != "n" ]; then
+									# Apaga o arquivo
+									rm -f $ARQ_CUSTOMER	
+									CMD="wget -q $URL_CUSTOMER/$ARQ_CUSTOMER"
+									$LOG _debug "CMD: $CMD"
+									MSG="Baixando arquivo $ARQ_CUSTOMER ..."
+									$LOG _info "$MSG" -b					
+									eval $CMD
+									$LOG _info "$MSG" -ok
+								fi
+							else 
+								CMD="wget -q $URL_CUSTOMER/$ARQ_CUSTOMER"
+								$LOG _debug "CMD: $CMD"
+								MSG="Baixando arquivo $ARQ_CUSTOMER ..."
+								$LOG _info "$MSG" -b					
+								eval $CMD
+								$LOG _info "$MSG" -ok
+							fi
+							# Apaga o index.html
+							rm -f index.html
+							
+							CMD="unzip -q -o $ARQ_CUSTOMER"
+							$LOG _debug "CMD: $CMD"
+							MSG="Descompactando $ARQ_CUSTOMER ..."
+							$LOG _info "$MSG" -b
+							eval $CMD
+							$LOG _info "$MSG" -ok
+							
+							CMD="chmod -R 777 *"
+							$LOG _debug "CMD: $CMD"
+							MSG="Atribuindo permissao ..."
+							$LOG _info "$MSG" -b
+							eval $CMD
+							$LOG _info "$MSG" -ok
+
+							# Atribuindo variaveis de ambiente
+							export ETICS_USER_DIR=$PWD
+							export ETICS_HOME=$PWD
+							
+							cd bin
+							CMD="./config_all.sh >/dev/null 2>&1"
+							MSG="Rodando config_all.sh ..."
+							$LOG _info "$MSG" -b
+							eval $CMD
+							$LOG _info "$MSG" -ok
+							
+							CMD="echo 's' | ./config_user.sh >/dev/null 2>&1"
+							MSG="Rodando config_user.sh ..."
+							$LOG _info "$MSG" -b
+							eval $CMD
+							$LOG _info "$MSG" -ok
+							
+							if [ -d $ETICS_HOME/configurator ]; then
+								_rodaConfigurador "$ETICS_HOME/configurator"
+							fi
+							
+							cd
+							$LOG _debug "Atualizando $ARQ_ALIAS_SDE..." 
+							_updateAlias "$PWD/ETICS/$VERSAO/$CLIENTE"
+					else 
+						$LOG _error "Nao foi possivel baixar o arquivo de customer."
+						rm -f index.html
+						exit 1
+					fi
+				else 
+					$LOG _error "$URL_CUSTOMER nao foi encontrada."
+				fi
+			else
+				$LOG _error "Nao foi possivel baixar o arquivo de account."
+				rm -f index.html
+				exit 1
+			fi
+		else 
+			$LOG _error "$URL_ACCOUNT nao foi encontrada."
+			exit 1
+		fi
+	else
+		$LOG _error "Falha ao recuperar a versao."
+		exit 1
+	fi
+else 
+	$LOG _info "ACCOUNT_DIR ja existe."
+	CMD="echo '$ACCOUNT_DIR' | awk -F'ETICS/' '{printf \$2}' | awk -F'/' '{printf \"%s/%s\", \$1, \$2}'"		
+	$LOG _debug "CMD: $CMD"
+	VERSAO=`eval "$CMD"`
+	$LOG _debug "VERSAO: $VERSAO"	
+	if [ "$VERSAO" != "" ]; then
+		# Atribuindo variaveis de ambiente
+		export ETICS_USER_DIR=$ACCOUNT_DIR/account
+		export ETICS_HOME=$ACCOUNT_DIR/account
+	else 
+		$LOG _error "Falha ao recuperar a versao."
+		exit 1
+	fi
+	
+	CMD="echo '$ACCOUNT_DIR' | awk -F'/' '{printf \$7}' "		
+	$LOG _debug "CMD: $CMD"
+	CLIENTE=`eval "$CMD"`
+	$LOG _debug "CLIENTE: $CLIENTE"	
+	if [ "$CLIENTE" = "" ]; then
+		$LOG _error "Falha ao recuperar o cliente."
+		exit 1
+	fi
+fi 
+
+# Recupera o diretorio de fontes corrente
+_setCurSrcDir
+
+cd $FONTES_DIR
+CMD="$GIT_GET_CURRENT_CMD | grep \\* | awk '{print \$2}'"
+GIT_CURRENT=`eval "$CMD"`
+$LOG _info "Branch corrente: $GIT_CURRENT"
+#_execCheckout
+if [ -d $FONTES_DIR/oper/fontes/components/legacy/core ]; then 
+	# Variaveis de ambiente para diretorio de fontes
+	$LOG _debug "Atribuindo variaveis de ambiente com diretorios de geracao..."
+	export CORE_DIR="$FONTES_DIR/oper/fontes/components/legacy/core"
+	export TARGET_DIR="${CORE_DIR}/target"
+	export GP_HOME="${TARGET_DIR}/develop/TEMP"
+	export OPER_HOME="${TARGET_DIR}"
+
+	# Monta alias facilitadores para copia
+	$LOG _info "Criando alias de copia (cplib e cpbin)..."
+	rm -f ~/$ARQ_ALIAS_TMP
+	ALIAS_LIB="alias cplib='cp $GP_HOME/lib/Linux/*.so $ETICS_HOME/lib/Linux/.'"
+	$LOG _debug "ALIAS_LIB: $ALIAS_LIB"
+    _gravaArqTmp "$ALIAS_LIB" "~/$ARQ_ALIAS_TMP"
+	ALIAS_BIN="alias cpbin='cp $GP_HOME/bin/Linux/* $ETICS_HOME/bin/Linux/.'"
+	$LOG _debug "ALIAS_BIN: $ALIAS_BIN"
+    _gravaArqTmp "$ALIAS_BIN" "~/$ARQ_ALIAS_TMP"	
+fi
+
+# Faz um backup da variavel PATH  
+if [ $?PATH_ORI ]; then
+	export PATH_ORI=${PATH}
+fi
+export PATH=${ETICS_HOME}/bin:${PATH_ORI}  
+
+cd $ETICS_USER_DIR
+
+$LOG _info "## Ambiente:"
+$LOG _info "## JAVA_HOME         :: ${JAVA_HOME}"
+$LOG _info "## ORACLE_HOME       :: ${ORACLE_HOME}"
+$LOG _info "##"
+$LOG _info "## Diretorios da account:"
+$LOG _info "## ETICS_HOME        :: ${ETICS_HOME}"
+$LOG _info "## ETICS_USER_DIR    :: ${ETICS_USER_DIR}"
+$LOG _info "##"
+$LOG _info "## Diretorios de compilacao:"
+$LOG _info "## TARGET_DIR        :: ${TARGET_DIR}"
+$LOG _info "## GP_HOME           :: ${GP_HOME}"
+$LOG _info "## OPER_HOME         :: ${OPER_HOME}"
+$LOG _info "##"
+$LOG _info "## Alias auxiliares:"
+CMD="cat ~/$ARQ_ALIAS_TMP | grep cplib | awk -F'=' '{print \$2}'"
+ALIAS_CPLIB=`eval "$CMD"`
+$LOG _info "## cplib             :: ${ALIAS_CPLIB}"
+CMD="cat ~/$ARQ_ALIAS_TMP | grep cpbin | awk -F'=' '{print \$2}'"
+ALIAS_CPBIN=`eval "$CMD"`
+$LOG _info "## cpbin             :: ${ALIAS_CPBIN}"
+$LOG _info "##"
+$LOG _info "############################################################################"
+$LOG _info "Finalizado com SUCESSO!"
+
+# FIM
+exec bash
+
+exit 0

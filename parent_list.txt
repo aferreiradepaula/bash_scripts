@@ -1,0 +1,15 @@
+./main/public-bom/pom.xml
+./main/super-parent/pom.xml
+./landbase/fontes/parent/pom.xml
+./eai/parent/pom.xml
+./oss/fontes/components/parent/pom.xml
+./lmcm/fontes/components/parent/pom.xml
+./eng/fontes/components/parent/pom.xml
+./oper/fontes/components/parent/pom.xml
+./osp/fontes/components/parent/pom.xml
+./isp/fontes/components/parent/pom.xml
+./recon/fontes/components/parent/pom.xml
+./geoanalytics/fontes/components/parent/pom.xml
+./feasibility/fontes/components/parent/pom.xml
+./etics/fontes/components/parent/pom.xml
+./dbmanager/fontes/components/parent/pom.xml

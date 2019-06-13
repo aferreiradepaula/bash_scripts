@@ -1,0 +1,3 @@
+#! /bin/bash
+
+java -jar /l/disk0/adrianof/installs/cfr/cfr-0.142.jar "$@"

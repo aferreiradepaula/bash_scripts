@@ -1,0 +1,29 @@
+#! /bin/bash
+
+JBOSS_BASE_DIR=$1
+OFFSET=$2
+
+CONTROLLER='localhost:9990'
+
+if [ "$OFFSET" != "" ]; then
+	NUM=$((9990 + $OFFSET))
+	CMD="echo $CONTROLLER | sed 's/9990/"$NUM"/'"
+	CONTROLLER=$(eval "$CMD") && echo ""
+fi
+
+FLAG_SAI=0
+while [ $FLAG_SAI -ne 1 ]
+do
+  sleep 2
+  CMD="$JBOSS_BASE_DIR/jboss-cli.sh --controller=$CONTROLLER -c command=':read-attribute(name=server-state)' | grep result | awk -F'\"' '{print \$4}' "
+  IS_RUNNING=$(eval "$CMD") && echo ""
+  if [ "$IS_RUNNING" == "running" ]; then
+	notify-send "SUCESSO NO DEPLOY" "Wildfly na $JBOSS_PORTS está no ar..."
+	FLAG_SAI=1
+  else 
+	if [ "$IS_RUNNING" == "restart_required" ]; then
+		notify-send "FALHA NO DEPLOY" "Wildfly na $JBOSS_PORTS nao subiu!"
+		FLAG_SAI=1
+	fi
+  fi    
+done

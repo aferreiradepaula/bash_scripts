@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# Arquivo de log
+LOG="logger_v4.bsh"
+
+COR_BG_DEFAULT="black"
+COR_LT_DEFAULT="white"
+
+PADRAO_COR=""
+COR_FG=""
+COR_BG=""
+COR_LT=""
+
+MSG_INFO="
+ ********************************** SOD ***************************************
+ *                          Starter OPER_DAEMON
+ ******************************************************************************
+ *
+ *  Script que inicializa o start_oper_daemon.sh em uma shell Xterm com cores 
+ *  personalizadas 
+ * 
+ *  As cores validas são todas que o xterm aceitar (ver site https://critical.ch/xterm/).
+ *  
+"
+
+MSG_USO="
+ * ****************************************************************************
+ * USO: sod PADRAO_COR
+ *
+ * Parametros:
+ * PADRAO_COR :: (obrigatorio) Define o padrao de cores 
+ * 
+ * Os padroes sao as cores utilizadas na sequencia (fonte, fundo e barra_lateral).
+ * Deve sempre ser utilizadas utilizando como separador o caracter espaco \" \"
+ * Exemplo:
+ * > sod green black yellow
+ * 
+ * Se for informado menos de 3 cores o script adota como padrao \"black white\" para fundo e lateral
+ * 
+"
+
+_trapError() {
+	$LOG _error "Deu algo errado... :("
+	fg
+}
+
+trap _trapError ERR
+
+_getParam() {
+	$LOG _debug "Numero de parametros: $#"
+	if [ $# -eq 0 ]; then
+		$LOG _info "$MSG_INFO"
+		$LOG _info "$MSG_USO"
+		exit 1
+	fi
+
+	if [ $# -gt 3 ]; then	
+	  $LOG _error "Numero de parametros invalidos!"
+	  $LOG _info "$MSG_USO"
+	  exit 1
+	fi
+
+	COR_FG=$1
+	
+	COR_BG=$2
+	
+	COR_LT=$3
+	
+	if [ "$COR_BG" = "" ]; then
+		COR_BG=$COR_BG_DEFAULT
+	fi
+	
+	if [ "$COR_LT" = "" ]; then
+		COR_LT=$COR_LT_DEFAULT
+	fi
+}
+
+
+############# MAIN
+
+_getParam $@
+
+TITLE="OPER_DEMON :: $ETICS_HOME"
+
+$LOG _info "Inicializando start_oper_daemon.sh..." -b
+CMD="xterm -fg $COR_FG -bg $COR_BG -bd $COR_LT -title \"$TITLE\" -e start_oper_daemon.sh &"
+eval $CMD
+$LOG _info "Inicializando start_oper_daemon.sh..." -ok

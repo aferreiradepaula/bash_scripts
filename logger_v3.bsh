@@ -1,0 +1,129 @@
+#!/bin/bash
+
+###############################################################################
+#
+# logger.bsh 
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Pacote de funcoes que faz o print de na shell formatado de acordo 
+#           com niveis de log.
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao inicial;
+#       - Funcoes que imprime logs em niveis (debug, info, warn, error)
+#
+# v2 :: Melhorias
+#       - Cores para os tipos de print. 
+# 
+# v3 :: Melhorias e correcoes
+#       - Metodo _print e recuperadores de cores.
+#       - Correcao nos codigos das constantes de cores.
+#
+###############################################################################
+
+
+# Nivel de log (info, debug, error, warning) - default: info
+LEVEL=${LEVEL="info"}
+
+# Comandos pre-definidos (facilitadores)
+BUSY="busy.bsh"
+
+# Tabela de cores
+#-----------------------------------------
+# Black        0;30     Dark Gray     1;30
+# Red          0;31     Light Red     1;31
+# Green        0;32     Light Green   1;32
+# Brown/Orange 0;33     Yellow        1;33
+# Blue         0;34     Light Blue    1;34
+# Purple       0;35     Light Purple  1;35
+# Cyan         0;36     Light Cyan    1;36
+# Light Gray   0;37     White         1;37
+
+
+# Definicao de cores
+FG_VERDE='\033[0;32m' # Info
+FG_VERDE_C='\033[1;32m' # Pergunta
+FG_AZUL='\033[0;34m' # Debug
+FG_VERMELHO='\033[0;31m' # Erro
+FG_AMARELO='\033[1;33m' # Warn
+FG_LARANJA='\033[0;33m' # Ok
+
+# Volta a cor padrao
+FG_SC='\033[0m' # Sem cor
+
+# Funcoes
+_debug () {
+	if [ "$LEVEL" = "debug" ]; then
+		printf "[${FG_AZUL}DEBUG${FG_SC}] :: $1\n"
+	fi
+}
+
+_print () {
+	MSG=$1
+	printf "$MSG\n"
+}
+
+_FG1 () {
+	printf "${FG_VERDE}"
+}
+_FG2 () {
+	printf "${FG_VERDE_C}"
+}
+_FG3 () {
+	printf "${FG_AZUL}"
+}
+_FG4 () {
+	printf "${FG_VERMELHO}"
+}
+_FG5 () {
+	printf "${FG_AMARELO}"
+}
+_FG6 () {
+	printf "${FG_LARANJA}"
+}
+_FGSC () {
+	printf "${FG_SC}"
+}
+
+_info () {
+	P1=$1
+	P2=$2
+	if [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		if [ "$P2" = "-b" ]; then			
+			MSG="[${FG_VERDE}INFO${FG_SC}]  :: $P1"
+			$BUSY "$MSG" &
+		else
+			if [ "$P2" = "-n" ]; then
+				printf "[${FG_VERDE_C}ANSW${FG_SC}]  :: $P1"
+			else 
+				if [ "$P2" = "-ok" ]; then
+					sleep 1
+					CMD="ps -elf | grep busy | grep -v grep | awk '{print \$4}'"
+					BUSYPID=`eval "$CMD"`
+					kill -13 $BUSYPID
+					printf "\r[${FG_VERDE}INFO${FG_SC}]  :: $P1 ${FG_LARANJA}ok${FG_SC}\n"
+				else 			
+					printf "[${FG_VERDE}INFO${FG_SC}]  :: $P1\n"
+				fi
+			fi
+		fi
+	fi
+}
+
+_error () {
+	if [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		printf "[${FG_VERMELHO}ERROR${FG_SC}] :: $1\n"
+	fi
+}
+
+_warn () {
+	if [ "$LEVEL" = "warning" ] || [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		printf "[${FG_AMARELO}WARN${FG_SC}]  :: $1\n"
+	fi
+}
+
+"$@"

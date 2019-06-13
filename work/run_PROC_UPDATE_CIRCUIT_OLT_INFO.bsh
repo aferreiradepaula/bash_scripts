@@ -1,0 +1,298 @@
+#!/bin/bash
+
+###############################################################################
+#
+# Name      :: run_PROC_UPDATE_CIRCUIT_OLT_INFO.bsh
+#
+# Author    :: Adriano Ferreira de Paula (adrianof@cpqd.com.br)
+#
+# Descr.    :: Run the procedure PROC_UPDATE_CIRCUIT_OLT_INFO on database for 
+#              all circuits without olt info.
+#
+# Copyrighs :: CPqD - Telecom and IT Solution
+#
+# Log       :: 10/19/2018 - Initial version
+# 
+###############################################################################
+#  Use
+###############################################################################
+#
+# prompt> run_PROC_UPDATE_CIRCUIT_OLT_INFO.bsh <DB_SCHEMA_NAME> <TWO_TASK> [-s|--summarize|CIRCUIT_IDENT]
+#
+# Parameters:
+#    DB_SCHEMA_NAME : Schema name for the database (mandatory);
+#    TWO_TASK       : Instance of oracle server (mandatory);
+#    -s	--summarize	: Print only the summary of the process (optional);
+#    or
+#    CIRCUIT_IDENT  : Circuit identifier (optional).
+#   
+# Attention: The summarizer param not perform commit!
+#
+###############################################################################
+#  Instalation
+###############################################################################
+#
+# 1) Copy the script to directory <account_dir>/bin/sh
+#
+# 2) Make a link for the script on the directory <account_dir>/bin to file .etics_wrapper
+#    > cd <account_dir>/bin
+#    > ln -sf .etics_wrapper run_PROC_UPDATE_CIRCUIT_OLT_INFO.bsh
+#
+###############################################################################
+
+# Variaveis de ambiente
+###############################################################################
+
+# Nivel de log (info, debug, error, warning, fatal) - default: info
+LEVEL=${LEVEL="info"}
+ETICS_USER_DIR=${ETICS_USER_DIR}
+
+# Variaveis globais
+###############################################################################
+
+SCRIPT="${0##*/}"
+
+# Definicao de cores
+FG_VERDE='\033[0;32m' # Info
+FG_VERDE_C='\033[1;32m' # Pergunta
+FG_AZUL='\033[0;34m' # Debug
+FG_VERMELHO='\033[0;31m' # Erro
+FG_AMARELO='\033[1;33m' # Warn
+FG_LARANJA='\033[0;33m' # Ok
+
+# Volta a cor padrao
+FG_SC='\033[0m' # Sem cor
+
+# Processamento
+DB_SCHEMA_NAME=""
+TWO_TASK=""
+SUMARIZE_FLAG="false"
+SQLPLUS_EXE=""
+LOG_DIR=""
+DB_PSWD=""
+INICTIAL_DATE=`date '+%Y-%m-%d_%H-%M-%S'`
+LOG_FILE=""
+CIRCUIT_IDENT=""
+
+# Funcoes de log
+##############################################################################
+_debug () {
+	if [ "$LEVEL" = "debug" ]; then
+		printf "[${FG_AZUL}DEBUG${FG_SC}] :: $1\n"
+	fi
+}
+
+_print () {
+	MSG=$1
+	printf "$MSG\n"
+}
+
+_FG1 () {
+	printf "${FG_VERDE}"
+}
+_FG2 () {
+	printf "${FG_VERDE_C}"
+}
+_FG3 () {
+	printf "${FG_AZUL}"
+}
+_FG4 () {
+	printf "${FG_VERMELHO}"
+}
+_FG5 () {
+	printf "${FG_AMARELO}"
+}
+_FG6 () {
+	printf "${FG_LARANJA}"
+}
+_FGSC () {
+	printf "${FG_SC}"
+}
+
+_info () {
+	P1=$1
+	P2=$2
+	if [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		if [ "$P2" = "-n" ]; then
+			printf "[${FG_VERDE_C}ANSW${FG_SC}]  :: $P1"
+		else 
+			printf "[${FG_VERDE}INFO${FG_SC}]  :: $P1\n"
+		fi
+	fi
+}
+
+_error () {
+	if [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		printf "[${FG_VERMELHO}ERROR${FG_SC}] :: $1\n"
+	fi
+}
+
+_warn () {
+	if [ "$LEVEL" = "warning" ] || [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ]; then
+		printf "[${FG_AMARELO}WARN${FG_SC}]  :: $1\n"
+	fi
+}
+
+_fatal () {
+	if [ "$LEVEL" = "warning" ] || [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ] || [ "$LEVEL" = "fatal" ]; then
+		printf "[${FG_VERMELHO}FATAL${FG_SC}]  :: $1\n"
+		exit 1
+	fi
+}
+
+# Funcoes gerais.
+##############################################################################
+_intro() {	
+	MSG="\n 
+	*
+	*                *** run_PROC_UPDATE_CIRCUIT_OLT_INFO ***
+	*
+	*      Run the procedure PROC_UPDATE_CIRCUIT_OLT_INFO on database for all circuits 
+	*      without olt info.
+	*
+	***********************************************************************************\n\n"
+	_info "$MSG"
+}
+
+_uso () {
+  MSG="\n
+	*
+	* Use: run_PROC_UPDATE_CIRCUIT_OLT_INFO.bsh <DB_SCHEMA_NAME> <ORACLE_INSTANCE> [-s|--summarize|CIRCUIT_IDENT]
+	*
+	*  DB_SCHEMA_NAME    :: Schema name for the database (mandatory);
+	*  TWO_TASK          :: Instance of oracle server (mandatory);
+	*  -s --summarize	 :: Print only the summary of the process (optional);
+	*  or
+	*  CIRCUIT_IDENT     :: Circuit identifier (optional).
+	* 
+	* Example: run_PROC_UPDATE_CIRCUIT_OLT_INFO.bsh MSC_KPU orcl
+	*
+	***********************************************************************************\n\n"
+	_warn "$MSG"
+  exit 0
+}
+
+_getParam() {
+	_debug "_getParam()"
+	if [ $# -eq 0 ]; then
+		_intro
+		_uso
+		exit 1
+	fi
+
+	if [ $# -lt 2 ] || [ $# -gt 3 ]; then	
+	  _error "Number of parameter is invalid!"
+	  _uso
+	  exit 1
+	fi
+		
+	DB_SCHEMA_NAME=$1
+	TWO_TASK=$2
+	
+	if [ "$3" = "-s" ] || [ "$3" = "--summarize" ] ; then
+		SUMARIZE_FLAG="true"
+	elif [ "$3" != "" ]; then
+		CIRCUIT_IDENT=$3
+	fi
+}
+
+_checkEnv() {
+	_debug "_checkEnv()"
+	_debug "ORACLE_HOME = ${ORACLE_HOME}"
+	if [ -z "${ORACLE_HOME}" ]; then
+		_fatal "The environment variable ORACLE_HOME is undefined! Aborting..."
+	fi	
+
+	SQLPLUS_EXE=${ORACLE_HOME}/bin/sqlplus
+	_debug "SQLPLUS_EXE = $SQLPLUS_EXE"
+	if [ ! -f "$SQLPLUS_EXE" ]; then
+		_fatal "The command $SQLPLUS_EXE not exist! Aborting..."
+	fi
+	
+	LOG_DIR=$ETICS_USER_DIR/log
+	_debug "LOG_DIR = $LOG_DIR"
+	if [ ! -d "$LOG_DIR" ]; then
+		_fatal "The log path not exist! Aborting..."
+	fi
+}
+
+_getLogFile () { 
+	_debug "_getLogFile"
+	LOG_FILE=${LOG_DIR}/${SCRIPT}-${DB_SCHEMA_NAME}-${TWO_TASK}-${INICTIAL_DATE}.log	
+	_debug "LOG_FILE = $LOG_FILE"
+}
+
+_getDbPass() {
+	_debug "_getDbPass()"
+	DB_PSWD=`rcsn.sh $DB_SCHEMA_NAME $DB_SCHEMA_NAME@$TWO_TASK dbpwddecript`
+	_debug "DB_PSWD = $DB_PSWD"
+	if [ "$DB_PSWD" = "" ]; then
+		_error "Unable to recover database password automatically!"
+		_info "Please enter the correct value: " -n
+		read RESP
+		if [ "$RESP" = "" ]; then
+			_fatal "Empty value! Aborting..."
+		fi
+	fi	
+}
+
+_runProcCmd () {
+	_debug "_runProcCmd()"
+	P_CMD=$1
+	_debug "P_CMD = $P_CMD"	
+	_info "Executing the procedure..."
+	CMD="$SQLPLUS_EXE -s $DB_SCHEMA_NAME/$DB_PSWD@$TWO_TASK >> $LOG_FILE 2>> $LOG_FILE << EOF
+
+WHENEVER SQLERROR EXIT SQL.SQLCODE;
+set heading on;
+set feed on;
+set lines 230;
+set serveroutput on format wrapped
+
+$P_CMD
+
+exit 0;
+
+EOF"
+	_debug "CMD = $CMD"
+	if [ "$LEVEL" != "debug" ]; then
+		eval "$CMD"
+	else
+		_debug "Command will not run in debug mode!"
+	fi
+}
+
+###############################################################################
+# MAIN
+###############################################################################
+_info "Inicializing..."
+
+# Valida variaveis de ambiente e comandos necessarios para a execucao.
+_checkEnv
+
+# Recupera os parametros
+_getParam $@
+
+# Cria o nome do arquivo de log para este processamento
+_getLogFile
+
+# Recupera a senha do banco.
+_getDbPass
+
+
+# Executa a procedure
+if [ "$SUMARIZE_FLAG" = "true" ]; then
+	# Processamento sumarizado.
+	_runProcCmd "exec PROC_UPDATE_CIRCUIT_OLT_INFO(null, true);"
+elif  [ "$CIRCUIT_IDENT" != "" ]; then
+	# Processamento por circuit_ident
+	_runProcCmd "exec PROC_UPDATE_CIRCUIT_OLT_INFO('$CIRCUIT_IDENT', false);"
+else
+	# Processamento em toda a base
+	_runProcCmd "exec PROC_UPDATE_CIRCUIT_OLT_INFO(null, false);"
+fi
+
+# Finalizado
+_info "Result in log file: $LOG_FILE"
+_info "Finalized."
+exit 0
