@@ -21,7 +21,8 @@
 #
 # v3 :: Adaptar para CDK    
 #       Imp : 
-#       Test: 
+#       Test:
+#       Incluir update especifico para webreport (deixando generico) 
 #
 ###############################################################################
 
@@ -35,7 +36,7 @@ BUSY="busy_v2.bsh"
 # Constantes globais
 ###############################################################################
 LIST_PORTS="0 1 2 3 4 5 6 7 8 9"
-LIST_CUSTOM_UPDATES="operweb"
+LIST_CUSTOM_UPDATES="operweb webreport"
 WILDFLY_MAIN_DIR_DEFAULT="/l/disk0/adrianof/cpqd/wildfly-8.2.0.Final"
 FONTES_DIR=""
 
@@ -70,19 +71,28 @@ CUSTOM_UPDATE=""
 EAR_ARRAY_TO_UPDATE=""
 
 
+GREP_VALUE_ETICS_VERSION="<cpqd.etics.version>"
+GREP_VALUE_CDK_VERSION="<cpqd.cdk.version>"
+
+IS_CDK=0
+
 declare -A JAR_FILE_MAP
 
 
 # Variaveis especificas para a customizacao do operweb
 MAIN_OPERWEB_DIR=""
+MAIN_WEB_DIR=""
+
 MODEL_TARGET_DIR="model/target/cache"
 CORE_TARGET_DIR="core/target"
 WEBAPPLICATION_JAR_TARGET_DIR="webapplication/jar/target"
 WEBAPPLICATION_WEB_TARGET_DIR="webapplication/web/target"
 
-MODEL_CACHE_FILE="CPqD-OperWeb123.cache"
+OPERWEB_MODEL_CACHE_FILE="CPqD-OperWeb123.cache"
+
 CONFIGURATION_JAR_FILE="cpqd-configuration.jar"
 
+# OperWeb
 OLD_OPERWEB_CORE_JAR_FILE=""
 NEW_OPERWEB_CORE_JAR_FILE=""
 
@@ -91,6 +101,25 @@ NEW_OPERWEB_WA_POJOS_JAR_FILE=""
 
 OLD_OPERWEB_WA_WEB_WAR_FILE=""
 NEW_OPERWEB_WA_WEB_WAR_FILE=""
+
+# ReportWeb
+JAR_TARGET_DIR="jar/target"
+JASPER_TARGET_DIR="jasper/target"
+WEB_TARGET_DIR="web/target"
+
+OLD_WEB_JAR_FILE=""
+NEW_WEB_JAR_FILE=""
+
+OLD_WEB_POJOS_FILE=""
+NEW_WEB_POJOS_FILE=""
+
+OLD_WEB_JASPER_FILE=""
+NEW_WEB_JASPER_FILE=""
+
+OLD_WEB_WAR_FILE=""
+NEW_WEB_WAR_FILE=""
+
+WEB_MODEL_CACHE_FILE=""
 
 # Definicao de cores
 FG_VERDE='\033[0;32m'
@@ -260,12 +289,26 @@ _getOthersVars() {
 	ETICS_REPO_DIR=`eval "$CMD"`
 	$LOG _debug "ETICS_REPO_DIR: $ETICS_REPO_DIR"
 	
-	CMD="cat \$ETICS_REPO_DIR/\$SUPER_PARENT_DIR/pom.xml | grep \"<cpqd.etics.version>\" | awk -F '>' '{print \$2}' | awk -F '<' '{print \$1}'"
+	SUPER_PARENT_POM_FILE="$ETICS_REPO_DIR/$SUPER_PARENT_DIR/pom.xml"
+	GREP_VALUE="$GREP_VALUE_ETICS_VERSION"
+	if [ ! -f "$SUPER_PARENT_POM_FILE" ]; then
+		# CDK
+		SUPER_PARENT_POM_FILE="$ETICS_REPO_DIR/$SUPER_PARENT_CDK_DIR/pom.xml"
+		GREP_VALUE="$GREP_VALUE_CDK_VERSION"
+		IS_CDK=1
+	fi
+	$LOG _debug "SUPER_PARENT_POM_FILE: $SUPER_PARENT_POM_FILE"
+	CMD="cat \$SUPER_PARENT_POM_FILE | grep \"$GREP_VALUE\" | awk -F '>' '{print \$2}' | awk -F '<' '{print \$1}'"
 	$LOG _debug "CMD: $CMD"
 	ETICS_VERSION=`eval "$CMD"`
 	$LOG _info "Versao no repositorio: $ETICS_VERSION"
 	
-	CMD="ls $WILDFLY_DEPLOYMENTS_DIR/*deskmap*.ear | awk -F '-ear-' '{print \$2}' | rev | cut -c5- | rev"
+	if [ $IS_CDK -eq 0 ]; then
+		CMD="ls $WILDFLY_DEPLOYMENTS_DIR/*deskmap*.ear | awk -F '-ear-' '{print \$2}' | rev | cut -c5- | rev"
+	else
+		# cpqd-security-glue-11.64.7.ear
+		CMD="ls $WILDFLY_DEPLOYMENTS_DIR/cpqd-security-glue*.ear | awk -F '-glue-' '{print \$2}' | rev | cut -c5- | rev"
+	fi
 	$LOG _debug "CMD: $CMD"
 	WILDFLY_VERSION=`eval "$CMD"`
 	$LOG _info "Versao no servidor: $WILDFLY_VERSION"	
@@ -282,6 +325,14 @@ _getOthersVars() {
 		
 		POM_FILE="$MAIN_OPERWEB_DIR/pom.xml"
 	fi
+	
+	if [ "$CUSTOM_VALUE" = "webreport" ]; then		
+		MAIN_WEB_DIR="$ETICS_REPO_DIR/osp/fontes/components/webreport"
+		TARGET_DIR="$MAIN_WEB_DIR/target"
+		$LOG _debug "MAIN_WEB_DIR: $MAIN_WEB_DIR"	
+		
+		POM_FILE="$MAIN_WEB_DIR/pom.xml"
+	fi
 
 	$LOG _debug "TARGET_DIR: $TARGET_DIR"	
 	$LOG _debug "POM_FILE: $POM_FILE"
@@ -294,12 +345,20 @@ _getArtifactIdValue () {
 		$LOG _fatal "Nao foi encontrado o arquivo pom.xml! Abortando a aplicacao."
 	fi
 	
-	CMD="cat $POM_FILE | grep -A15 \"<project\" | sed 's/\s*//g' | grep -2 \"project.artifactId\" | grep \"<artifactId>\" | cut -c13- | rev | cut -c14- | rev"
+	CMD="cat $POM_FILE | grep -A15 \"<project\" | sed 's/\s*//g' | grep \"<artifactId>\" | grep -v parent | cut -c13- | rev | cut -c14- | rev"
 	$LOG _debug "CMD: $CMD"
 	ARTIFACT_ID=`eval "$CMD"`
 	$LOG _debug "ARTIFACT_ID: $ARTIFACT_ID"
 	if [ "$ARTIFACT_ID" = "" ];then 
-		$LOG _fatal "Nao foi possivel extrair o artifactId do arquivo pom.xml! Abortando a aplicacao."
+		# Tenta novamente de uma forma diferente.
+		CMD="cat $POM_FILE | grep -A15 \"<project\" | sed 's/\s*//g' | grep \"<artifactId>\" | grep \"$CUSTOM_VALUE\" | cut -c13- | rev | cut -c14- | rev"
+		$LOG _debug "CMD: $CMD"
+		ARTIFACT_ID=`eval "$CMD"`
+		$LOG _debug "ARTIFACT_ID: $ARTIFACT_ID"
+		
+		if [ "$ARTIFACT_ID" = "" ];then 
+			$LOG _fatal "Nao foi possivel extrair o artifactId do arquivo pom.xml! Abortando a aplicacao."
+		fi
 	fi
 }
 
@@ -322,7 +381,7 @@ _runMvnCleanInstall () {
 		MSG="Compilando $ARTIFACT_ID... "
 		$LOG _info "$MSG" -b
 		eval $CMD
-		CMD_AUX="grep FAILURE $MAVEN_LOG | grep -v BUILD"
+		CMD_AUX="grep \"BUILD FAILURE\" $MAVEN_LOG"
 		$LOG _debug "CMD_AUX: $CMD_AUX"
 		RESP=`eval "$CMD_AUX"`
 		if [ "$RESP" = "" ]; then
@@ -367,7 +426,11 @@ _getFilesNames () {
 	$LOG _debug "  OLD_JAR_FILE_ARRAY: ${OLD_JAR_FILE_ARRAY[@]}"
 	
 	for OLD_JAR_FILE_AUX in "${OLD_JAR_FILE_ARRAY[@]}"; do
-		CMD="echo $OLD_JAR_FILE_AUX | sed 's|[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*[\-]*[A-Z]*|$WILDFLY_VERSION|'"
+		if [ $IS_CDK -eq 0 ]; then 
+			CMD="echo $OLD_JAR_FILE_AUX | sed 's|[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*[\-]*[A-Z]*|$WILDFLY_VERSION|'"
+		else
+			CMD="echo $OLD_JAR_FILE_AUX | sed 's|[0-9]*\.[0-9]*\.[0-9]*[\-]*[A-Z]*|$WILDFLY_VERSION|'"
+		fi
 		$LOG _debug "  CMD: $CMD"	
 		NEW_JAR_FILE_AUX=`eval "$CMD"`
 		$LOG _debug "  NEW_JAR_FILE_AUX: $NEW_JAR_FILE_AUX"
@@ -412,9 +475,10 @@ _updateEarFile () {
 	eval $CMD
 		
 	for OLD_JAR_FILE in ${!JAR_FILE_MAP[@]}; do
-	
+		$LOG _debug "  OLD_JAR_FILE: $OLD_JAR_FILE"
 		# Renomeia os arquivos jar
 		NEW_JAR_FILE=${JAR_FILE_MAP[${OLD_JAR_FILE}]}
+		$LOG _debug "  NEW_JAR_FILE: $NEW_JAR_FILE"
 		if [ "$OLD_JAR_FILE" != "$NEW_JAR_FILE" ]; then
 			CMD="mv $OLD_JAR_FILE $NEW_JAR_FILE"
 			$LOG _debug "  CMD: $CMD"
@@ -513,7 +577,7 @@ _updateEarFileOperweb () {
 	fi
 	
 	# Atualizando o cpqd-configuration.jar com o arquivo CPqD-OperWeb123.cache
-	CMD="7z a $WILDFLY_DEPLOYMENTS_DIR/$CONFIGURATION_JAR_FILE $MAIN_OPERWEB_DIR/$MODEL_TARGET_DIR/$MODEL_CACHE_FILE >/dev/null 2>&1"
+	CMD="7z a $WILDFLY_DEPLOYMENTS_DIR/$CONFIGURATION_JAR_FILE $MAIN_OPERWEB_DIR/$MODEL_TARGET_DIR/$OPERWEB_MODEL_CACHE_FILE >/dev/null 2>&1"
 	$LOG _debug "CMD: $CMD"
 	MSG="Atualizando arquivo $WILDFLY_DEPLOYMENTS_DIR/$CONFIGURATION_JAR_FILE ..."
 	$LOG _info "$MSG" -b
@@ -552,6 +616,105 @@ _updateEarFileOperweb () {
 	eval $CMD
 	$LOG _info "$MSG" -ok
 	
+	CMD="7z a $WEBDESKMAPREPORT_EAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/ >/dev/null 2>&1" #/lib
+	$LOG _debug "CMD: $CMD"
+	MSG="Atualizando arquivos jar na pasta lib do ear ..."
+	$LOG _info "$MSG" -b
+	eval $CMD
+	$LOG _info "$MSG" -ok
+	
+	# Apagando diretorio lib aux.
+	CMD="rm -fr $WILDFLY_DEPLOYMENTS_DIR/lib"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+}
+
+# Generico
+_updateEarFileWebApp () {
+	$LOG _debug "_updateEarFileWebApp"
+	
+	# Atualizando a pasta lib do ear.
+	if [ -d "$WILDFLY_DEPLOYMENTS_DIR/lib" ]; then
+		CMD="rm -fr $WILDFLY_DEPLOYMENTS_DIR/lib"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	CMD="mkdir $WILDFLY_DEPLOYMENTS_DIR/lib"
+	$LOG _debug "CMD: $CMD"
+	eval $CMD
+	
+	# Atualiza o ear
+	WEBDESKMAPREPORT_EAR_FILE="$WILDFLY_DEPLOYMENTS_DIR/cpqd-etics-webdeskmapreport-ear-$WILDFLY_VERSION.ear"
+	$LOG _debug "WEBDESKMAPREPORT_EAR_FILE: $WEBDESKMAPREPORT_EAR_FILE"
+	
+	# Alterando os nomes dos arquivos para a versao do wildfly.
+	if [ "$OLD_WEB_CORE_FILE" != "" ] && [ "$OLD_WEB_CORE_FILE" != "$NEW_WEB_CORE_FILE" ]; then
+		CMD="mv $OLD_WEB_CORE_FILE $NEW_WEB_CORE_FILE"	
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+		
+		# Copia os jars para a pasta lib para serem atualizados.
+		CMD="cp $NEW_WEB_CORE_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	if [ "$OLD_WEB_JAR_FILE" != "" ] && [ "$OLD_WEB_JAR_FILE" != "$NEW_WEB_JAR_FILE" ]; then
+		CMD="mv $OLD_WEB_JAR_FILE $NEW_WEB_JAR_FILE"	
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+		
+		# Copia os jars para a pasta lib para serem atualizados.
+		CMD="cp $NEW_WEB_JAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	if [ "$OLD_WEB_JASPER_FILE" != "" ] && [ "$OLD_WEB_JASPER_FILE" != "$NEW_WEB_JASPER_FILE" ]; then
+		CMD="mv $OLD_WEB_JASPER_FILE $NEW_WEB_JASPER_FILE"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+		
+		# Copia os jars para a pasta lib para serem atualizados.
+		CMD="cp $NEW_WEB_JASPER_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	if [ "$OLD_WEB_POJOS_FILE" != "" ] && [ "$OLD_WEB_POJOS_FILE" != "$NEW_WEB_POJOS_FILE" ]; then
+		CMD="mv $OLD_WEB_POJOS_FILE $NEW_WEB_POJOS_FILE"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+		
+		# Copia os jars para a pasta lib para serem atualizados.
+		CMD="cp $NEW_WEB_POJOS_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+	fi
+	if [ "$OLD_WEB_WAR_FILE" != "" ] && [ "$OLD_WEB_WAR_FILE" != "$NEW_WEB_WAR_FILE" ]; then
+		CMD="mv $OLD_WEB_WAR_FILE $NEW_WEB_WAR_FILE"
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+		
+		# Copia os jars para a pasta lib para serem atualizados.
+		CMD="cp $NEW_WEB_WAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/."
+		$LOG _debug "CMD: $CMD"
+		eval $CMD
+		
+		CMD="7z a $WEBDESKMAPREPORT_EAR_FILE $NEW_WEB_WAR_FILE >/dev/null 2>&1" #/raiz
+		$LOG _debug "CMD: $CMD"
+		MSG="Atualizando arquivo war do ear ..."
+		$LOG _info "$MSG" -b
+		eval $CMD
+		$LOG _info "$MSG" -ok
+	fi
+	
+	# Atualizando o cpqd-configuration.jar com o arquivo .cache
+	CMD="7z a $WILDFLY_DEPLOYMENTS_DIR/$CONFIGURATION_JAR_FILE $MAIN_WEB_DIR/$MODEL_TARGET_DIR/$WEB_MODEL_CACHE_FILE >/dev/null 2>&1"
+	$LOG _debug "CMD: $CMD"
+	MSG="Atualizando arquivo $WILDFLY_DEPLOYMENTS_DIR/$CONFIGURATION_JAR_FILE ..."
+	$LOG _info "$MSG" -b
+	eval $CMD
+	$LOG _info "$MSG" -ok
+
+	# Atualiza a lib com todos jaris.
 	CMD="7z a $WEBDESKMAPREPORT_EAR_FILE $WILDFLY_DEPLOYMENTS_DIR/lib/ >/dev/null 2>&1" #/lib
 	$LOG _debug "CMD: $CMD"
 	MSG="Atualizando arquivos jar na pasta lib do ear ..."
@@ -641,6 +804,33 @@ else
 		# Faz a atualizacao  dos arquivos do operweb.
 		_updateEarFileOperweb
 	fi
+	if [ "$CUSTOM_VALUE" = "webreport" ]; then
+		# Recupera todos os nomes dos arquivos envolvidos na atualizacao.
+		_getFilesNames "$MAIN_WEB_DIR/$JAR_TARGET_DIR/cpqd-osp-webreport-*.jar"
+		OLD_WEB_JAR_FILE="${!JAR_FILE_MAP[@]}"
+		$LOG _debug "OLD_WEB_JAR_FILE: $OLD_WEB_JAR_FILE"
+		NEW_WEB_JAR_FILE="${JAR_FILE_MAP[${OLD_WEB_JAR_FILE}]}"
+		$LOG _debug "NEW_WEB_JAR_FILE: $NEW_WEB_JAR_FILE"
+
+		_getFilesNames "$MAIN_WEB_DIR/$JASPER_TARGET_DIR/cpqd-osp-webreport-jasper-*.jar"
+		OLD_WEB_JASPER_FILE="${!JAR_FILE_MAP[@]}"
+		$LOG _debug "OLD_WEB_JASPER_FILE: $OLD_WEB_JASPER_FILE"
+		NEW_WEB_JASPER_FILE="${JAR_FILE_MAP[${OLD_WEB_JASPER_FILE}]}"
+		$LOG _debug "NEW_WEB_JASPER_FILE: $NEW_WEB_JASPER_FILE"
+	
+		_getFilesNames "$MAIN_WEB_DIR/$WEB_TARGET_DIR/cpqd-osp-webreport-web-*.war"
+		OLD_WEB_WAR_FILE="${!JAR_FILE_MAP[@]}"
+		$LOG _debug "OLD_WEB_WAR_FILE: $OLD_WEB_WAR_FILE"
+		NEW_WEB_WAR_FILE="${JAR_FILE_MAP[${OLD_WEB_WAR_FILE}]}"
+		$LOG _debug "NEW_WEB_WAR_FILE: $NEW_WEB_WAR_FILE"
+		
+		WEB_MODEL_CACHE_FILE="CPqD-OSP-Report123.cache"
+		
+		# Faz a atualizacao  dos arquivos do webreport.
+		_updateEarFileWebApp
+	fi
+	
+	
 fi
 
 # Roda o wildfly

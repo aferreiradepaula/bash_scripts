@@ -1,6 +1,11 @@
 #!/bin/bash
 echo ""
-echo " Conectando a vpn COLOMBIA (pbernalsa/Octubre_2018)"
+echo " Conectando a vpn COLOMBIA"
+echo ""
+echo " pbernalsa gkcastosi gfmontovan aapasim jmpiedrahilo hbsiolaride atellezsu strias"
+echo ""
+echo " Senha: Agosto_19"
+echo ""
 echo "--------------------------------------------------------------------------"
 
 # Cria um tunel
@@ -10,7 +15,7 @@ sudo openvpn --mktun --dev tun1
 sudo ifconfig tun1 up
 
 # Conecta na vpn
-sudo openconnect -s /usr/share/vpnc-scripts/vpnc-script 200.21.240.131 --user=pbernalsa --authgroup=VPN_TELEFONICA --key-password=PR1NC1P4L4S4 --interface=tun1 --servercert pin-sha256:woomTDoRHQHrZedhZswstmz6iIU8iTlRsxJSNFCSG9c= 
+sudo openconnect -v -s /usr/share/vpnc-scripts/vpnc-script 200.21.240.131 --user=pbernalsa --authgroup=VPN_TELEFONICA --interface=tun1 --servercert pin-sha256:woomTDoRHQHrZedhZswstmz6iIU8iTlRsxJSNFCSG9c= 
 
 # Para desconectar Ctrl+C.
 

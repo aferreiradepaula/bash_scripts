@@ -25,11 +25,13 @@
 #
 # v4 :: Melhoria
 #       - Parametro para ver tamanho do arquivo.
+#		- Funcao _fatal
+#       - nivel none
 #
 ###############################################################################
 
 
-# Nivel de log (info, debug, error, warning) - default: info
+# Nivel de log (info, debug, error, warning, none) - default: info
 LEVEL=${LEVEL="info"}
 
 # Comandos pre-definidos (facilitadores)
@@ -68,7 +70,9 @@ _debug () {
 
 _print () {
 	MSG=$1
-	printf "$MSG\n"
+	if [ "$LEVEL" != "none" ]; then
+		printf "$MSG\n"
+	fi
 }
 
 _FG1 () {
@@ -147,7 +151,12 @@ _warn () {
 _fatal () {
 	if [ "$LEVEL" = "warning" ] || [ "$LEVEL" = "error" ] || [ "$LEVEL" = "info" ] || [ "$LEVEL" = "debug" ] || [ "$LEVEL" = "fatal" ]; then
 		printf "[${FG_VERMELHO}FATAL${FG_SC}]  :: $1\n"
-		CMD="kill -9 $PPID"		
+		CMD="kill -9 $PPID >/dev/null 2>&1"		
+		eval $CMD
+		exit 1
+	else
+		# LEVEL=none
+		CMD="kill -9 $PPID >/dev/null 2>&1"		
 		eval $CMD
 		exit 1
 	fi

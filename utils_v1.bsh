@@ -1,0 +1,202 @@
+#!/bin/bash
+
+###############################################################################
+#
+# utils.bsh 
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Pacote de funcoes utilitarias
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao inicial;
+#
+###############################################################################
+
+
+# Nivel de log (info, debug, error, warning, none) - default: info
+LEVEL=${LEVEL="info"}
+SIMULATE=${SIMULATE="n"}
+
+# Comandos pre-definidos (facilitadores)
+LOG="logger_v4.bsh"
+
+# Constantes globais
+VERSION_REGEX="([0-9]+\\.){4}([0-9]+)+(\\-SNAPSHOT)*|([0-9]+\\.){4}([0-9]+)+(\\-FIX[0-9]+)*|([0-9]+\\.){4}([0-9]+)+(\\-T[0-9]+)*"
+
+# Url defaults
+URL_PACKAGE_RELEASE_DEFAULT="http://repodsso/gc/RELEASES/ETICS"
+URL_PACKAGE_SNAPSHOT_DEFAULT="http://repodsso/gc/BUILDS-AWS/ETICS"
+
+# Alternativo
+URL_PACKAGE_RELEASE_ALTERNATIVE="http://scate/gc/RELEASES/ETICS"
+URL_PACKAGE_SNAPSHOT_ALTERNATIVE="http://scate/gc/BUILDS-AWS/ETICS"
+
+# Alternativas para o comando wget para recuperar arquivos grandes.
+if hash axel 2>/dev/null; then 
+	GET="axel -q -n 5"
+else 
+	GET="wget -q"
+fi
+
+# Transforma falhas (bugs) em erros.
+set -o errexit -o pipefail -o noclobber -o nounset
+
+# Funcoes
+_getCustomer() {
+	$LOG _debug "_getCustomer()"	
+	CUSTOMER=$1
+	URL_PACKAGE=$2
+	CLIENTE=$3
+	
+	URL_CUSTOMER=$URL_PACKAGE/customer
+	$LOG _debug " |_URL_CUSTOMER = $URL_CUSTOMER"
+	if [ -f index.html ]; then
+		rm -f index.html
+	fi
+	CMD="wget -q $URL_CUSTOMER/"
+	$LOG _debug " |_CMD: $CMD"
+	eval $CMD		
+	if [ ! -f index.html ]; then
+		$LOG _fatal "$URL_CUSTOMER nao foi encontrada."
+	else 
+		ARQ_CUSTOMER=$(_extractZipFromIndexWithClient $CUSTOMER $CLIENTE)
+		$LOG _debug " |_ARQ_CUSTOMER: $ARQ_CUSTOMER"
+		if [ "$ARQ_CUSTOMER" == "" ]; then 
+			# Nao achou, tenta no novo padrao (pqp!)
+			URL_CUSTOMER=$URL_PACKAGE/customer/$CLIENTE
+			$LOG _debug " |_URL_CUSTOMER = $URL_CUSTOMER"
+			if [ -f index.html ]; then
+				rm -f index.html
+			fi
+			CMD="wget -q $URL_CUSTOMER/"
+			$LOG _debug " |_CMD: $CMD"
+			eval "$CMD"
+			if [ ! -f index.html ]; then
+				$LOG _fatal "$URL_CUSTOMER nao foi encontrada."
+			else
+				ARQ_CUSTOMER=$(_extractZipFromIndexWithClient $CUSTOMER $CLIENTE)
+				$LOG _debug " |_ARQ_CUSTOMER: $ARQ_CUSTOMER"
+				if [ "$ARQ_CUSTOMER" == "" ]; then 
+					rm -f index.html					
+					$LOG _fatal "Nao foi possivel baixar o arquivo de customer."
+				fi
+			fi
+		fi
+		
+		# Baixa o arquivo de customer
+		if [ -f $ARQ_CUSTOMER ]; then
+			# Arquivo ja existe
+			$LOG _warn "Arquivo $ARQ_CUSTOMER ja existe."
+			$LOG _info "Baixar novamente? (s/n) [s]" -n
+			read RESP
+			if [ "$RESP" != "N" ] || [ "$RESP" != "n" ]; then
+				# Apaga o arquivo
+				[[ "$SIMULATE" = "n" ]] && rm -f $ARQ_CUSTOMER	
+				CMD="$GET $URL_CUSTOMER/$ARQ_CUSTOMER"
+				$LOG _debug " |_CMD: $CMD"
+				_runCmd "$CMD" "Baixando arquivo $ARQ_CUSTOMER ..."				
+			fi
+		else 
+			CMD="$GET $URL_CUSTOMER/$ARQ_CUSTOMER"
+			$LOG _debug " |_CMD: $CMD"
+			EXITC=$(_runCmd "$CMD" "Baixando arquivo $ARQ_CUSTOMER ...") && printf ""
+			echo "EXITC=$EXITC"
+		fi
+		
+		if [ "$CUSTOMER" = "server" ] || [ "$CUSTOMER" = "dbmanager" ]; then					
+			CMD="unzip -q -o $ARQ_CUSTOMER -d package-server"
+		else 	
+			CMD="unzip -q -o $ARQ_CUSTOMER"
+		fi
+		$LOG _debug "          |_CMD: $CMD"
+						
+		_runCmd "$CMD" "Descompactando $ARQ_CUSTOMER ..."
+				
+		if [ -f index.html ]; then
+			rm -f index.html
+		fi
+	fi
+}
+
+function _runCmd() {
+	$LOG _debug "_runCmd"
+	typeset CMD="$1"
+	typeset MSG="$2"
+	typeset PLOG=""
+	if [ "$#" -eq 3 ]; then
+		PLOG="$3"
+	fi
+	$LOG _debug "  |_CMD: $CMD"
+	$LOG _debug "  |_MSG: $MSG"
+	$LOG _debug "  |_PLOG: $PLOG"
+	
+	typeset RET_CODE
+
+	if [ "$PLOG" == "-l" ]; then
+		# Loga em um arquivo temporario
+		if [ -f log_temp.log ]; then
+			rm log_temp.log
+		fi
+		TOLOG=">/dev/null 2>log_temp.log"
+	else 
+		if [ "$PLOG" == "-ln" ]; then
+			TOLOG=">/dev/null 2>&1"
+		else
+			TOLOG=""
+		fi
+	fi
+	$LOG _debug "  |_TOLOG: $TOLOG"
+	$LOG _info "$MSG" -b
+	[[ "$SIMULATE" = "n" ]] && eval "$CMD $TOLOG" && printf ""
+	RET_CODE=$?
+	$LOG _debug "  |_RET_CODE: $RET_CODE"
+	if [ $RET_CODE -eq 0 ]; then
+		# Process Success
+		$LOG _info "$MSG" -ok
+	else
+		# Process Failure
+		$LOG _info "$MSG" -nok
+		if [ "$PLOG" == "-l" ]; then
+			TEMP_CMD="cat log_temp.log"
+			TEMP_LOG=$(eval $TEMP_CMD)
+			$LOG _warn "$TEMP_LOG"
+			rm log_temp.log
+		fi
+	fi
+	exit $RET_CODE
+}
+
+function _getGlobal() {
+	typeset VAR_NAME=$1
+	CMD="echo \$$VAR_NAME"
+	eval $CMD
+}
+
+function _extractZipFromIndex() {
+	typeset TYPE=$1
+	CMD="cat index.html | grep href | grep $TYPE | grep -v wildfly | grep .zip | awk -F'\"' '{printf \$4}'"
+	RESP=$(eval "$CMD") && printf ""
+	if [ "$RESP" != "" ] && [[ ! $RESP == *"zip"* ]]; then
+		CMD="cat index.html | grep href | grep $TYPE | grep -v wildfly | grep .zip | awk -F'\"' '{printf \$8}'"
+		RESP=$(eval "$CMD") && printf ""		
+	fi 
+	echo $RESP
+}
+
+function _extractZipFromIndexWithClient() {
+	typeset TYPE=$1
+	typeset CLIENTE=$2
+	CMD="cat index.html | grep href | grep .zip | grep $TYPE | grep $CLIENTE | awk -F'\"' '{printf \$4}'"
+	RESP=$(eval "$CMD") && printf ""
+	if [ "$RESP" != "" ] && [[ ! $RESP == *"zip"* ]]; then
+		CMD="cat index.html | grep href | grep .zip | grep $TYPE | grep $CLIENTE | awk -F'\"' '{printf \$8}'"
+		RESP=$(eval "$CMD") && printf ""		
+	fi 
+	echo $RESP
+}
+
+"$@"

@@ -1,0 +1,459 @@
+#!/bin/bash
+
+###############################################################################
+#
+# sql_import.bsh :: Sql Import
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Importa a base de dados via dbmanager e cria os arquivos de configuração
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao inicial;
+#       - Baseada no sqlimport.bat 
+# 
+#
+###############################################################################
+
+# Parametros validos
+OPTIONS=b:i:p:hd
+LONGOPTS=database:,instance:,prefix:,help,debug
+
+# Nivel de log (info, debug, error, warning, fatal) - default: info
+LEVEL=${LEVEL="info"}
+SIMULATE=${SIMULATE="n"}
+
+# Dependencia de scripts externos
+LOG="logger_v4.bsh"
+UTILS="utils_v1.bsh"
+
+SQL_CONN_TMP_FILE="getcon.sql"
+
+# Variaveis globais
+# Parametro de help
+HELP=n
+# Parametro de Banco
+DATABASE=-
+# Parametro de instância
+INSTANCE=-
+# Parametro de diretorio de instalacao
+DIR_INSTALLATION=-
+
+# Url defaults
+#URL_PACKAGE_RELEASE_DEFAULT=$($UTILS _getGlobal URL_PACKAGE_RELEASE_DEFAULT)
+#URL_PACKAGE_SNAPSHOT_DEFAULT=$($UTILS _getGlobal URL_PACKAGE_SNAPSHOT_DEFAULT)
+
+URL_PACKAGE_RELEASE_DEFAULT=$($UTILS _getGlobal URL_PACKAGE_RELEASE_ALTERNATIVE)
+URL_PACKAGE_SNAPSHOT_DEFAULT=$($UTILS _getGlobal URL_PACKAGE_SNAPSHOT_ALTERNATIVE)
+
+# Dados do banco
+INSTANCE_HOST=""
+INSTANCE_SID=""
+INSTANCE_PORT=""
+INSTANCE_SERVICE_NAME=""
+
+# Diversos
+DIR_DBMANAGER=""
+DIR_DBMANAGER_CONFIG=""
+
+# Constantes
+TNSNAMES_FILE="${TNS_ADMIN=\~}/tnsnames.ora"
+INSTANCE_USER_DEFAULT="ospadm"
+INSTANCE_PWD_DEFAULT="cpqd"
+
+COMMANDLINE_IMPORT_FILE_BKP="commandline-import_bkp.xml"
+COMMANDLINE_IMPORT_FILE="commandline-import.xml"
+
+# Alternativas para o comando wget para recuperar arquivos grandes.
+if hash axel 2>/dev/null; then 
+	GET="axel -q -n 5"
+else 
+	GET="wget -q"
+fi
+
+# Transforma falhas (bugs) em erros.
+set -o errexit -o pipefail -o noclobber -o nounset
+
+
+# Funcoes
+_intro() {	
+	$LOG _info " 
+	*
+	*                               *** SQL IMPORT ***
+	*
+	*      Importa a base de dados via dbmanager e cria os arquivos de configuração.
+	*
+	**************************************************************************************\n\n"
+}
+
+_uso () {
+	$LOG _info "
+	*
+	* Uso: $0 <-b DB_NAME> <-i INSTANCE> [-p DIR_INSTALLATION] [-h] [-d]
+	*
+	**************************************************************************************
+	*  Parametros obrigatorios:
+	*
+	*  -b, --database <DATABASE>       :: Nome do banco que vai ser importado.
+	*                                     Exemplo: -d TLF_BR_DOMINIO
+	*  
+	*  -i, --instance <INSTANCE>       :: Instância onde o banco está instalado.
+	*                                     Exemplo: -i SN3114
+	*
+	**************************************************************************************
+	*  Parametros opcionais:
+	* 
+	*  -p, --prefix <DIR_INSTALLATION> :: Diretorio de instalação do pacote (raiz do diretório dbmanager).
+	*                                     Exemplo: -p ~/ETICS/8.60.51/8.60.51.1250.0.0/bra_copel/server/package-server
+	*
+	*  -h, --help              		   :: Imprime o uso e sai.
+	* 
+	*  -d, --debug                     :: Ativa modo de debug;
+	*                                     (Similar a setar a variavel de ambiente LEVEL=debug)
+	* 
+	**************************************************************************************\n\n"
+    exit 0
+}
+
+_getParam() {	
+	! getopt --test > /dev/null
+	if [[ ${PIPESTATUS[0]} -ne 4 ]]; then
+		$LOG _fatal "Falha no comando 'getopt --test'! Nao sera possivel proceguir!"
+	fi
+
+	# Nenhum parametro foi informado.
+	if [ $# -eq 0 ]; then
+		_intro
+		_uso
+		exit 1
+	fi
+
+	! PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
+	if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+		$LOG _fatal "Parametro obrigatorios não foram informados!"
+	fi
+
+	# Le a entrada pelo getopt
+	eval set -- "$PARSED"
+
+	# Verificando parametros
+	while true; do
+		case "$1" in
+			-h|--help)
+				HELP=y				
+				shift
+				;;
+			-d|--debug)
+				export LEVEL="debug"
+				shift
+				;;
+			-b|--database)
+				DATABASE="$2"
+				shift 2
+				;;
+			-i|--instance)
+				INSTANCE="$2"
+				shift 2
+				;;	
+			-p|--prefix)
+				DIR_INSTALLATION="$2"
+				shift 2
+				;;
+			--)
+				shift
+				break
+				;;
+			*)
+				$LOG _fatal "Parametros invalidos!"	
+				;;
+		esac
+	done
+	$LOG _debug "  |_getParam()"
+	$LOG _debug "    |_DATABASE=$DATABASE"
+	$LOG _debug "    |_INSTANCE=$INSTANCE"
+	$LOG _debug "    |_DIR_INSTALLATION=$DIR_INSTALLATION"
+
+	if [ "$HELP" == "y" ]; then 
+		_intro
+		_uso
+		exit 0
+	fi
+
+	if [ "$DATABASE" = "-" ] || [ "$INSTANCE" = "-" ]; then
+		$LOG _error "Parametro obrigatório não preenchido."
+		$LOG _fatal "Finalizando operacao!"
+	fi
+	
+	if [ "$DIR_INSTALLATION" = "-" ]; then
+		$LOG _warn "Diretorio de instalacao nao informado! Assumindo diretorio corrente como diretorio de instalacao."
+		DIR_INSTALLATION=$PWD
+	fi
+}
+
+_checkRequirements() {
+	$LOG _debug "  |_checkParamValues()"
+	
+	if [ ! -f $TNSNAMES_FILE ]; then 
+		$LOG _error "Arquivo tnsnames.ora não foi encontrado!"
+		$LOG _warn "Verifique se a variável de ambiente TNS_ADMIN está apontando para o diretório de instalação do arquivo."
+		$LOG _fatal "Finalizando operacao!"
+	fi
+	
+	CMD="grep -i $INSTANCE $TNSNAMES_FILE"	
+	$LOG _debug "    |_CMD: $CMD"
+	CHECK_INSTANCE=$(eval "$CMD") && printf ""
+	$LOG _debug "    |_CHECK_INSTANCE: $CHECK_INSTANCE"
+	if [ "$CHECK_INSTANCE" = "" ]; then 
+		$LOG _error "Instância informada não existe no arquivo tnsnames.ora!"
+		$LOG _fatal "Finalizando operacao!"
+	fi
+	
+	if [ ! -d $DIR_INSTALLATION ]; then
+		$LOG _error "Diretorio de instalação não foi encontrado!"
+		$LOG _fatal "Finalizando operacao!"
+	else 
+		if [ ! -d $DIR_INSTALLATION/dbmanager ]; then
+			$LOG _warn "Pacote dbmanager não foi encontrado!"
+			
+			# Recupera o campo CLENTE do diretorio de instalacao			
+			if [[ $DIR_INSTALLATION == *"~/"* ]]; then
+				CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$4}'"
+			else 
+				if [[ $DIR_INSTALLATION == *"/home"* ]]; then
+					CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$6}'"
+				else
+					CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$7}'"
+				fi
+			fi			
+			$LOG _debug "    |_CMD: $CMD"
+			MAIN_VERSION=$(eval "$CMD") && printf ""
+			$LOG _debug "    |_MAIN_VERSION: $MAIN_VERSION"
+			
+			if [ "$MAIN_VERSION" == "" ]; then 
+				$LOG _fatal "Nao foi possivel extrair a versao principal do diretorio de instalacao. Padrao incorreto!"
+			fi
+			
+			# Recupera o campo CLENTE do diretorio de instalacao			
+			if [[ $DIR_INSTALLATION == *"~/"* ]]; then
+				CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$3}'"
+			else 
+				if [[ $DIR_INSTALLATION == *"/home"* ]]; then
+					CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$5}'"
+				else
+					CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$6}'"
+				fi
+			fi			
+			$LOG _debug "    |_CMD: $CMD"
+			DIR_VERSION=$(eval "$CMD") && printf ""
+			$LOG _debug "    |_DIR_VERSION: $DIR_VERSION"
+			
+			if [ "$DIR_VERSION" == "" ]; then 
+				$LOG _fatal "Nao foi possivel extrair a versao do diretorio de instalacao. Padrao incorreto!"
+			fi
+			
+			if [[ $MAIN_VERSION == *"SNAPSHOT"* ]] || [[ $MAIN_VERSION == *"FIX"* ]] || [[ $MAIN_VERSION == *"T"* ]]; then
+				#SNAPSHOT
+				URL_PACKAGE="$URL_PACKAGE_SNAPSHOT_DEFAULT/$DIR_VERSION/$MAIN_VERSION"
+			else
+				#RELEASE
+				URL_PACKAGE="$URL_PACKAGE_RELEASE_DEFAULT/$DIR_VERSION/$MAIN_VERSION"
+			fi
+			$LOG _debug "   |_URL_PACKAGE = $URL_PACKAGE"
+			
+			# Baixa o index.html do diretorio 	
+			URL_DBMANAGER=$URL_PACKAGE/package
+			$LOG _debug "   |_URL_DBMANAGER: $URL_DBMANAGER"
+			if [ -f index.html ]; then
+				rm -f index.html
+			fi
+			CMD="wget -q $URL_DBMANAGER/"
+			$LOG _debug "   |_CMD: $CMD"
+			if eval $CMD; then
+				if [ -f index.html ]; then
+					ARQ_DBMANAGER=$($UTILS _extractZipFromIndex dbmanager)
+					$LOG _debug "ARQ_DBMANAGER: $ARQ_DBMANAGER"
+					if [ "$ARQ_DBMANAGER" == "" ]; then 
+						$LOG _fatal "Nao foi possivel baixar o arquivo $ARQ_DBMANAGER."
+					fi
+				else 
+					$LOG _fatal "Falha ao recuperar o arquivo index.html da url: $URL_DBMANAGER"
+				fi
+			else 
+				$LOG _fatal "Falha ao recuperar o arquivo index.html da url: $URL_DBMANAGER"
+			fi
+
+			if [ -f $ARQ_DBMANAGER ]; then
+				# Arquivo ja existe
+				$LOG _warn "Arquivo $ARQ_DBMANAGER ja existe."
+				$LOG _info "Baixar novamente? (s/n) [s]" -n
+				read RESP
+				if [ "$RESP" != "N" ] || [ "$RESP" != "n" ]; then
+					# Apaga o arquivo
+					[[ "$SIMULATE" = "n" ]] && rm -f $ARQ_DBMANAGER
+					
+					CMD="$GET $URL_DBMANAGER/$ARQ_DBMANAGER"
+					$LOG _debug "    |_CMD: $CMD"
+					MSG="Baixando arquivo $ARQ_DBMANAGER ..."
+					$LOG _info "$MSG" -b
+					[[ "$SIMULATE" = "n" ]] && eval $CMD
+					$LOG _info "$MSG" -ok
+				fi
+			else
+				CMD="$GET $URL_DBMANAGER/$ARQ_DBMANAGER"
+				$LOG _debug "    |_CMD: $CMD"
+				MSG="Baixando arquivo $ARQ_DBMANAGER ..."
+				$LOG _info "$MSG" -b
+				[[ "$SIMULATE" = "n" ]] && eval $CMD
+				$LOG _info "$MSG" -ok
+			fi
+
+			# Descompactar o arquivo
+			CMD="unzip -q -o $ARQ_DBMANAGER"
+			$LOG _debug "    |_CMD: $CMD"
+			MSG="Descompactando $ARQ_DBMANAGER ..."
+			$LOG _info "$MSG" -b
+			[[ "$SIMULATE" = "n" ]] && eval $CMD
+			$LOG _info "$MSG" -ok
+			
+			# Recupera o campo CLENTE do diretorio de instalacao			
+			if [[ $DIR_INSTALLATION == *"~/"* ]]; then
+				CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$5}'"
+			else 
+				if [[ $DIR_INSTALLATION == *"/home"* ]]; then
+					CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$7}'"
+				else
+					CMD="echo \"$DIR_INSTALLATION\" | awk -F\"/\" '{print \$8}'"
+				fi
+			fi			
+			$LOG _debug "    |_CMD: $CMD"
+			CLIENTE=$(eval "$CMD") && printf ""
+			$LOG _debug "    |_CLIENTE: $CLIENTE"
+			
+			if [ "$CLIENTE" == "" ]; then 
+				$LOG _fatal "Nao foi possivel extrair cliente do diretorio de instalacao. Padrao incorreto!"
+			fi 			
+			
+			# Recupera o arquivo customer do dbmanager
+			$UTILS _getCustomer "dbmanager" $URL_PACKAGE $CLIENTE
+		fi
+		DIR_DBMANAGER="$DIR_INSTALLATION/dbmanager"
+		DIR_DBMANAGER_CONFIG="$DIR_DBMANAGER/config"
+		
+	fi
+	
+	CMD="sed -n '/$INSTANCE/I,/)/p' $TNSNAMES_FILE | awk -F'HOST=' '{print \$2}' | awk -F')' '{print \$1}'"
+	$LOG _debug "    |_CMD: $CMD"
+	INSTANCE_HOST=$(eval "$CMD") && printf ""
+	$LOG _debug "    |_INSTANCE_HOST: $INSTANCE_HOST"		
+	if [ "$INSTANCE_HOST" == "" ]; then
+		$LOG _error "Não foi possivel recuperar dados do HOST no arquivo tnsnames.ora!"
+		$LOG _fatal "Finalizando operacao!"
+	fi
+
+	CMD="sed -n '/$INSTANCE/I,/)/p' $TNSNAMES_FILE | awk -F'PORT=' '{print \$2}' | awk -F')' '{print \$1}'"
+	$LOG _debug "    |_CMD: $CMD"
+	INSTANCE_PORT=$(eval "$CMD") && printf ""
+	$LOG _debug "    |_INSTANCE_PORT: $INSTANCE_PORT"
+	if [ "$INSTANCE_PORT" == "" ]; then
+		$LOG _error "Não foi possivel recuperar dados de PORT no arquivo tnsnames.ora!"
+		$LOG _fatal "Finalizando operacao!"
+	fi
+
+	CMD="sed -n '/$INSTANCE/I,/)/p' $TNSNAMES_FILE | awk -F'SERVICE_NAME=' '{print \$2}' | awk -F')' '{print \$1}'"
+	$LOG _debug "    |_CMD: $CMD"
+	INSTANCE_SERVICE_NAME=$(eval "$CMD") && printf ""
+	$LOG _debug "    |_INSTANCE_SERVICE_NAME: $INSTANCE_SERVICE_NAME"
+	if [ "$INSTANCE_SERVICE_NAME" == "" ]; then
+		$LOG _error "Não foi possivel recuperar dados de SERVICE_NAME no arquivo tnsnames.ora!"
+		$LOG _fatal "Finalizando operacao!"
+	fi
+}
+
+_setImportFile() {
+	$LOG _debug "  |_setImportFile()"
+	
+	if [ ! -f $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE ]; then
+		$LOG _error "Arquivo $COMMANDLINE_IMPORT_FILE nao foi encontrado!"
+		$LOG _fatal "Finalizando operacao!"
+	fi 
+	
+	if [ ! -f $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE_BKP ]; then
+		# Cria o backup
+		CMD="cp $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE_BKP"
+		$LOG _debug "    |_CMD: $CMD"
+		eval $CMD
+	else 
+		# Refaz as alteracoes
+		CMD="cp -f $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE_BKP $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+		$LOG _debug "    |_CMD: $CMD"
+		eval $CMD
+	fi
+	
+	# Faz as substituicoes
+	CMD="sed -i 's/UTF-8/ISO-8859-1/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	CMD="sed -i 's/DBA_USER/$INSTANCE_USER_DEFAULT/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	CMD="sed -i 's/DBA_PASSWORD/$INSTANCE_PWD_DEFAULT/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	CMD="sed -i 's/DB_INSTANCE/$INSTANCE/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	CMD="sed -i 's/DB_HOST/$INSTANCE_HOST/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	CMD="sed -i 's/DB_PORT/$INSTANCE_PORT/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	CMD="sed -i 's/DB_SID/$INSTANCE_SERVICE_NAME/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	CMD="sed -i 's/DB_DM_IMPORT_USER/$DATABASE/g' $DIR_DBMANAGER_CONFIG/$COMMANDLINE_IMPORT_FILE"
+	$LOG _debug "    |_CMD: $CMD"
+	eval $CMD
+	$LOG _info "Arquivo $COMMANDLINE_IMPORT_FILE modificado."
+}
+
+_runImport() {
+	$LOG _debug "  |_runImport()"
+	# Tem que ir para o diretorio para executar...
+	OLD_DIR=${PWD}
+	cd $DIR_DBMANAGER
+	CMD="./dbmheadless.sh import >/dev/null 2>&1"
+	# TODO: CMD="xterm -fg green -bg black -bd yellow -title "dbmheadless.sh import" -e dbmheadless.sh import"
+	$LOG _debug "    |_CMD: $CMD"
+	MSG="Rodando import do dbmanager (dbmheadless.sh import) ..."
+	$LOG _info "$MSG" -b
+	[[ "$SIMULATE" = "n" ]] && eval $CMD
+	$LOG _info "$MSG" -ok	
+	cd $OLD_DIR	
+}
+
+###############################################################################
+# MAIN
+###############################################################################
+$LOG _info "Iniciando..."
+
+# Recupera os parametros
+_getParam $@
+
+# Verifica dependencias
+_checkRequirements
+
+# Configura os dados para importar o banco com permissao de acesso.
+_setImportFile
+
+# Executa o import
+_runImport
+
+$LOG _info "Finalizado com SUCESSO."
+
+# Fim
+unset LEVEL
+exit 0

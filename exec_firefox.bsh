@@ -1,0 +1,6 @@
+#!/bin/bash
+
+export LC_ALL=pt_BR.ISO-8859-1
+export LANG=pt_BR.ISO-8859-1
+
+/usr/bin/firefox &

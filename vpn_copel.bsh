@@ -1,0 +1,21 @@
+#!/bin/bash
+echo ""
+echo " Conectando a vpn COPEL (adrianof@cpqd.com.br/n#...)"
+echo ""
+echo "--------------------------------------------------------------------------"
+
+# Cria um tunel
+sudo openvpn --mktun --dev tun1
+
+# Liga o tunel
+sudo ifconfig tun1 up
+
+# Conecta na vpn
+sudo openconnect --juniper https://juno.copeltelecom.com/cpqd --user adrianof@cpqd.com.br --interface tun1 --servercert pin-sha256:+nT2CW8JSdLfwRzKBAKYDL80PToYRcLWwxMx2qQhlPQ=
+
+# Para desconectar Ctrl+C.
+
+sudo ifconfig tun1 down
+sudo ip link delete tun1
+
+echo "Finalizado."

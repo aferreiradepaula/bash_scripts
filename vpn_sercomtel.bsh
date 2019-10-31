@@ -1,0 +1,21 @@
+#!/bin/bash
+echo ""
+echo " Conectando a vpn SERCOMTEL (cpqdsuporte/senha1)"
+echo ""
+echo "--------------------------------------------------------------------------"
+
+# Cria um tunel
+sudo openvpn --mktun --dev tun1
+
+# Liga o tunel
+sudo ifconfig tun1 up
+
+# Conecta na vpn
+sudo openconnect -s /usr/share/vpnc-scripts/vpnc-script 200.155.38.254 --user=cpqdsuporte --authgroup=SERCOMTEL_INTRANET1 --interface=tun1 --servercert pin-sha256:PEAEPp4Avba4jPT8U4fFETOLt9LtQ2m7mA/8pzIW34o=
+
+# Para desconectar Ctrl+C.
+
+sudo ifconfig tun1 down
+sudo ip link delete tun1
+
+echo "Finalizado."

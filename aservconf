@@ -1,0 +1,338 @@
+#!/bin/bash
+
+###############################################################################
+#
+# auto_server_configurator.bsh :: Auto Server Configurator
+#
+# Autor  :: Adriano Ferreira de Paula
+#
+# Descr. :: Configura automaticamente o pacote server e instala em uma porta informada
+#
+###############################################################################
+#  Features
+###############################################################################
+#
+# v1 :: Versao inicial;
+#     
+###############################################################################
+
+# Variavel para recuperar tempo de execução.
+TE="$(date +%s)" 
+
+# Parametros validos
+OPTIONS=c:v:w:hsdp:
+LONGOPTS=client:,version:,wports:,help,simulate,debug,prefix:
+
+# Nivel de log (info, debug, error, warning, fatal) - default: info
+LEVEL=${LEVEL="info"}
+# Parametro para simulacao
+SIMULATE=n
+# Parametro de help
+HELP=n
+# Cliente
+CLIENTE=-
+# PORTA WILDFLY
+WILDFLY_PORTS=-
+# VERSAO
+MAIN_VERSION=-
+# PREFIX
+DIR_PACKAGE_BASE=-
+
+# Dependencia de scripts externos
+LOG="logger_v4.bsh"
+BUSY="busy_v2.bsh"
+UTILS="utils_v1.bsh"
+
+VERSION_REGEX=$($UTILS _getGlobal VERSION_REGEX)
+
+# Transforma falhas (bugs) em erros.
+set -o errexit -o pipefail -o noclobber -o nounset
+
+# Constantes globais
+LIST_CLIENTES="bra_vivo chi_tlf col_tlf per_tlf bra_tim bra_copel bra_sercomtel bra_claro bra_cpfl bra_telebras arg_arsat ury_antel usa_msc "
+LIST_PORTS="0 1 2 3 4 5 6 7 8 9"
+ARQ_CONF_DEFAULT="ant.install.properties"
+ARQ_CONF_CLIENTE=""
+
+APPSERVER_STANDALONE_DIR_PROP="appserver.standalone.dir"
+DEFAULT_WF_APPSERVER_STANDALONE_DIR="/home/cpqd/wildfly-8.2.0.Final"
+APPSERVER_STANDALONE_DIR_VALUE=""
+
+declare -A PARAM_LIST
+
+# Funcoes
+_intro() {	
+	$LOG _info " 
+	*
+	*                        *** Auto Server Configurator ***
+	*
+	*      Configura automaticamente o pacote server e instala em uma porta informada.
+	*
+	**************************************************************************************\n\n"
+}
+
+_uso () {
+	$LOG _info "
+	*
+	* Uso: $0 <-c CLIENTE> <-v VERSAO> <-w WILDFLY_PORTS> [OPCIONAIS]
+	*
+	**************************************************************************************
+	*  Parametros obrigatorios:
+	*
+	*  -c, --client <CLIENTE>        :: Cliente relacionado a esse pacote:
+	*                                   Valores válidos: $LIST_CLIENTES
+	* 
+	*  -v, --version <VERSAO>        :: Versao principal (Ex: 8.25.311.0.1-SNAPSHOT, ou 8.25.311.0.1 para release);
+	*
+	*  -w, --wports <WILDFLY_PORTS>  :: Porta do wildfly (Ex: 0 para ports-00);
+	*                                   Valores válidos: $LIST_PORTS
+	*
+	**************************************************************************************
+	*  Parametros opcionais:
+	*
+	*  -h, --help              :: Imprime o uso e sai.
+	* 
+	*  -s, --simulate          :: Modo simulado;
+	*
+	*  -d, --debug             :: Ativa modo de debug;
+	*                             (Similar a setar a variavel de ambiente LEVEL=debug)
+	*
+	*  -p, --prefix	           :: Diretorio base para instalacao.
+	*  
+	**************************************************************************************\n\n"
+  exit 0
+}
+
+_getParam() {
+
+	# Grava a resposta do comando getopt no ${PIPESTATUS[0]}
+	! getopt --test > /dev/null
+	if [[ ${PIPESTATUS[0]} -ne 4 ]]; then
+		$LOG _fatal "Falha no comando 'getopt --test'! Nao sera possivel proceguir!"
+	fi
+
+	# Nenhum parametro foi informado.
+	if [ $# -eq 0 ]; then
+		_intro
+		_uso
+		exit 1
+	fi
+
+	! PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")	
+	if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+		$LOG _fatal "Parametros incompletos!"
+	fi
+	
+	# Le a entrada pelo getopt
+	eval set -- "$PARSED"
+
+	# Verificando parametros
+	while true; do
+		case "$1" in
+			-c|--client)
+				CLIENTE="$2"
+				shift 2
+				;;
+			-v|--version)
+				MAIN_VERSION="$2"
+				shift 2
+				;;
+			-w|--wports)
+				WILDFLY_PORTS="$2"
+				shift 2
+				;;				
+			-h|--help)
+				HELP=y
+				shift
+				;;
+			-s|--simulate)
+				SIMULATE=y
+				shift
+				;;
+			-d|--debug)
+				export LEVEL="debug"
+				shift
+				;;
+			-p|--prefix)
+				DIR_PACKAGE_BASE="$2"
+				shift 2
+				;;
+			--)
+				shift
+				break
+				;;
+			*)
+				$LOG _fatal "Parametro $1 invalido!"	
+			;;
+		esac
+	done
+	
+	$LOG _debug "_getParam()"
+
+	if [ "$HELP" == "y" ]; then 
+		_intro
+		_uso
+		exit 0
+	fi
+
+	if [ "$CLIENTE" == "" ]; then
+		$LOG _fatal "Parametro '-c' e obrigatorio!"
+	else
+		# Cliente foi preenchido como parametro
+		if [ ! -z "${LIST_CLIENTES##*$CLIENTE*}" ]; then
+			# Cliente invalido.
+			$LOG _fatal "Cliente informado nao eh valido."
+		fi
+	fi
+	
+	if [ "$MAIN_VERSION" != "-" ]; then
+		! [[ "$MAIN_VERSION" =~ $VERSION_REGEX ]] && $LOG _fatal "Opa, o padrao eh 5 grupos de digitos separados por ponto!"
+	else
+		if [ "$URL_PACKAGE" == "-" ] || [ "$URL_PACKAGE" == "" ] || [ "$REMOVE" == "y" ]; then
+			# Pergunta a versao do pacote para determinar a versao principal
+			$LOG _info "Digite a versao do pacote: " -n
+			read RESP
+			if [ "$RESP" == "" ]; then
+				$LOG _fatal "Parametros -u ou -r exigem o prenchimento da versão."
+			else	
+				MAIN_VERSION="$RESP"
+			fi
+			! [[ "$MAIN_VERSION" =~ $VERSION_REGEX ]] && $LOG _fatal "Padrão inválido! Deve ser 5 grupos de digitos separados por ponto!"			
+		fi
+	fi
+	$LOG _debug "  |_MAIN_VERSION = $MAIN_VERSION"
+
+	CMD="echo $MAIN_VERSION | awk -F'.' '{printf \"%s.%s.%s\",\$1,\$2,\$3}'"
+	$LOG _debug "  |_CMD: $CMD"
+	DIR_VERSION=$(eval "$CMD")
+	$LOG _debug "  |_DIR_VERSION = $DIR_VERSION"
+
+	if [ "$DIR_PACKAGE_BASE" == "-" ] || [ "$DIR_PACKAGE_BASE" == "" ]; then
+		# Diretorio de instalacao nao foi informado (Utilizar um padrao)
+		DIR_PACKAGE_BASE_AUX=${HOME}/ETICS
+	else 
+		DIR_PACKAGE_BASE_AUX=$DIR_PACKAGE_BASE
+	fi
+	$LOG _debug "  |_DIR_PACKAGE_BASE_AUX = $DIR_PACKAGE_BASE_AUX"
+	
+	DIR_PACKAGE=$DIR_PACKAGE_BASE_AUX/$DIR_VERSION/$MAIN_VERSION/$CLIENTE
+	$LOG _debug "  |_DIR_PACKAGE= $DIR_PACKAGE"
+
+	MAIN_CONFIGURATOR_DIR=$DIR_PACKAGE_BASE_AUX/configurator_properties
+	$LOG _debug "  |_MAIN_CONFIGURATOR_DIR = $MAIN_CONFIGURATOR_DIR"
+	if [ ! -d $MAIN_CONFIGURATOR_DIR ]; then
+		# Diretorio dos arquivos de configuracao nao existe.		
+		$LOG _error "Diretorio dos arquivos de configuração não existe: $MAIN_CONFIGURATOR_DIR"
+		$LOG _fatal "É necessário criar um diretorio como repositório dos arquivos de instalação por cliente no diretório base das instalação."
+	fi
+
+	ARQ_CONF_CLIENTE=$MAIN_CONFIGURATOR_DIR/$ARQ_CONF_DEFAULT-$CLIENTE
+	$LOG _debug "  |_ARQ_CONF_CLIENTE = $ARQ_CONF_CLIENTE"
+	if [ ! -f $ARQ_CONF_CLIENTE ]; then
+		$LOG _error "Arquivos de configuração por cliente não existe: $ARQ_CONF_CLIENTE"
+		$LOG _fatal "Copiar o arquivo $ARQ_CONF_DEFAULT gerado após a configuração manual para o diretório de configuradores adicionando o sufixo \"-$CLIENTE\""
+	fi
+	
+	CONFIGURATOR_DIR=$DIR_PACKAGE/server/package-server/configurator
+	$LOG _debug "  |_CONFIGURATOR_DIR = $CONFIGURATOR_DIR"
+
+	if [ "$WILDFLY_PORTS" != "-" ]; then
+		if [ ! -z "${LIST_PORTS##*$WILDFLY_PORTS*}" ]; then
+			$LOG _fatal "Porta invalida."
+		fi
+	else 
+		$LOG _fatal "Parametro obrigatório não informado."
+	fi	
+	APPSERVER_STANDALONE_DIR_VALUE="$DEFAULT_WF_APPSERVER_STANDALONE_DIR/ports-0$WILDFLY_PORTS"
+}
+
+_validateClientConfFile() {
+	$LOG _debug "_validateClientConfFile()"
+	CMD="grep '=' $CONFIGURATOR_DIR/bin/$ARQ_CONF_DEFAULT | wc -l"
+	QTD_PARAM_DEFAULT=$(eval "$CMD")
+	
+	CMD="grep '=' $ARQ_CONF_CLIENTE | wc -l"
+	QTD_PARAM_CLIENT=$(eval "$CMD")
+	
+	if [ $QTD_PARAM_DEFAULT -gt $QTD_PARAM_CLIENT ]; then
+		$LOG _error "Existem parametros novos."
+		$LOG _fatal "Executar manualmente o setup.sh e atualizar o arquivo do cliente."
+	fi
+	
+	if [ $QTD_PARAM_DEFAULT -lt $QTD_PARAM_CLIENT ]; then
+		$LOG _error "Foram removidos alguns parametros."
+		$LOG _fatal "Executar manualmente o setup.sh e atualizar o arquivo do cliente."
+	fi
+}
+
+_loadClientConfFile() {
+	$LOG _debug "_loadClientConfFile()"
+	MSG="Carregando valores do arquivo de configuração: $ARQ_CONF_CLIENTE ..."
+	$LOG _info "$MSG" -b
+	while IFS=' = ' read -r key value; do		
+		PARAM_LIST["$key"]="$value"
+	done < $ARQ_CONF_CLIENTE
+	$LOG _info "$MSG" -ok
+}
+
+_createDefaultConfFile() {
+	$LOG _debug "_createDefaultConfFile()"
+	if [ -f $CONFIGURATOR_DIR/bin/$ARQ_CONF_DEFAULT ]; then
+		# Limpa para criar novamente
+		CMD="rm $CONFIGURATOR_DIR/bin/$ARQ_CONF_DEFAULT"
+		[[ "$SIMULATE" = "n" ]] && eval $CMD
+	fi
+	# Roda a primeira vez para gerar o arquivo properties vazio.
+	CMD="$CONFIGURATOR_DIR/bin/setup.sh text-auto"
+	$LOG _debug "  |_CMD = $CMD"
+	$UTILS _runCmd "$CMD" "Criando o arquivo de configuração default ..." -l
+}
+
+_runConfiguratorAuto() {
+	$LOG _debug "_runConfiguratorAuto()"
+	
+	# Substitui os parametros 
+	for key in ${!PARAM_LIST[@]}; do
+		$LOG _debug "  |_$key = ${PARAM_LIST[${key}]}"
+		if [ "$key" == "$APPSERVER_STANDALONE_DIR_PROP" ]; then
+			PARAM_LIST[$key]="$APPSERVER_STANDALONE_DIR_VALUE"	
+		fi
+		CMD="sed -i \"s|${key} = |${key} = ${PARAM_LIST[${key}]}|\" $CONFIGURATOR_DIR/bin/$ARQ_CONF_DEFAULT"		
+		[[ "$SIMULATE" = "n" ]] && eval $CMD		
+	done
+	
+	CMD="$CONFIGURATOR_DIR/bin/setup.sh text-auto >/dev/null 2>&1"
+	$LOG _debug "  |_CMD = $CMD"
+	MSG="Rodando configurador (setup.sh) ..."
+	$LOG _info "$MSG" -b
+	[[ "$SIMULATE" = "n" ]] && eval $CMD
+	$LOG _info "$MSG" -ok
+}
+
+
+###############################################################################
+# MAIN
+###############################################################################
+$LOG _info "Iniciando..."
+
+# Recupera os parametros
+_getParam $@
+
+# Roda a primeira vez para gerar o arquivo properties vazio.
+_createDefaultConfFile
+
+# Valida quantidade de parametros nos arquivos default e do cliente.
+_validateClientConfFile
+
+# Carrega os parametros na lista PARAM_LIST
+_loadClientConfFile
+
+# Executa o configurador em modo automatico
+_runConfiguratorAuto
+
+TE="$(($(date +%s)-TE))"
+
+$LOG _info "Finalizado com SUCESSO em ${TE} segundos."
+
+# FIM
+exit 0
